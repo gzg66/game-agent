@@ -1,0 +1,19 @@
+{
+  "project_name": "unity_poco_tutorial",
+  "engine_type": "unity3d",
+  "package_name": "com.netease.nie.yosemite",
+  "ui_root_candidates": ["Canvas", "UIRoot", "Main Camera"],
+  "startup_wait_seconds": 8,
+  "popup_blacklist": [],
+  "critical_pages": ["home", "menu", "settings"],
+  "metric_sampling": {
+    "fps": true,
+    "stutter": true,
+    "memory": false
+  },
+  "selector_aliases": {
+    "close": ["Close", "关闭", "Back"]
+  },
+  "dangerous_actions": ["pay", "充值", "delete"],
+  "page_signatures": {}
+}

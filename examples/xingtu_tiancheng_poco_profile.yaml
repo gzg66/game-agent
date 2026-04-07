@@ -1,0 +1,132 @@
+project_name: 星途天城(poco)
+engine_type: cocos2dx_js
+
+# 当前默认包名已指向 MuMu 中的星途天城(poco) 包
+package_name: com.xttc.release.poco
+
+ui_root_candidates:
+  - root
+  - Canvas
+  - UIRoot
+  - MainScene
+
+startup_wait_seconds: 10
+
+popup_blacklist:
+  - 更新公告
+  - 用户协议
+  - 实名认证
+  - 签到弹窗
+
+critical_pages:
+  - login
+  - lobby
+  - role_select
+  - battle
+
+metric_sampling:
+  fps: true
+  stutter: true
+  memory: false
+
+selector_aliases:
+  close:
+    - close
+    - 关闭
+    - 跳过
+    - skip
+  back:
+    - back
+    - 返回
+  confirm:
+    - confirm
+    - 确认
+    - 确定
+    - ok
+
+dangerous_actions:
+  - 充值
+  - 支付
+  - 购买
+  - 删除账号
+
+page_signatures:
+  login:
+    - 开始游戏
+    - 游客登录
+    - 账号登录
+  lobby:
+    - 冒险
+    - 背包
+    - 任务
+    - 邮件
+  battle:
+    - 自动
+    - 暂停
+    - 跳过
+    - 结算
+
+module_scenarios:
+  - name: newbie
+    goal: 大厅
+    max_states: 30
+    preferred_keywords:
+      - 开始
+      - 进入
+      - 下一步
+      - 跳过
+      - 领取
+      - 确认
+    blocked_keywords:
+      - 充值
+      - 支付
+      - 购买
+    expected_pages:
+      - login
+      - lobby
+  - name: battle
+    goal: 战斗
+    max_states: 35
+    preferred_keywords:
+      - 冒险
+      - 出战
+      - 挑战
+      - 自动
+      - 结算
+      - 再次挑战
+    blocked_keywords:
+      - 充值
+      - 支付
+      - 购买
+    expected_pages:
+      - battle
+
+runtime_guard:
+  cruise_minutes: 0
+  max_rounds: 1
+  restart_on_crash: true
+  stall_repeat_rounds: 3
+  module_pause_seconds: 2
+
+issue_detection:
+  enable_log_error_check: true
+  enable_numeric_check: true
+  enable_resource_check: true
+  logcat_lines: 150
+
+report_preferences:
+  emit_markdown: true
+
+log_keywords:
+  - " error "
+  - exception
+  - assert
+  - fatal
+
+initial_actions:
+  - 关闭
+  - 跳过
+  - 确认
+
+version_tags:
+  - baseline

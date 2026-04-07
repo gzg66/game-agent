@@ -1,0 +1,34 @@
+project_name: demo_cocos_game
+engine_type: cocos_creator
+package_name: com.demo.game
+ui_root_candidates:
+  - UIRoot
+  - Canvas
+  - MainUI
+startup_wait_seconds: 8
+popup_blacklist:
+  - user_agreement_dialog
+  - update_notice_dialog
+critical_pages:
+  - login
+  - lobby
+  - setting
+metric_sampling:
+  fps: true
+  stutter: true
+  memory: false
+selector_aliases:
+  close:
+    - close
+    - 关闭
+    - skip
+dangerous_actions:
+  - 支付
+  - 充值
+  - 删除
+  - 退出登录
+page_signatures:
+  lobby:
+    - 大厅
+    - 商城
+    - 任务

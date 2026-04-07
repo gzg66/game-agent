@@ -1,0 +1,19 @@
+{
+  "project_name": "unity_poco_legacy_demo",
+  "engine_type": "unity3d",
+  "package_name": "com.NetEase",
+  "ui_root_candidates": ["Canvas", "Main Camera", "<Root>"],
+  "startup_wait_seconds": 5,
+  "popup_blacklist": [],
+  "critical_pages": ["begin", "menu", "drag"],
+  "metric_sampling": {
+    "fps": false,
+    "stutter": false,
+    "memory": false
+  },
+  "selector_aliases": {
+    "close": ["close", "Close", "返回", "Back"]
+  },
+  "dangerous_actions": [],
+  "page_signatures": {}
+}
