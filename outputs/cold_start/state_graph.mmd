@@ -1,0 +1,15 @@
+graph TD
+    n_97dd66bd5e01c667["Start<br/>(unknown)"]
+    n_29fe28a44cf4e03b["basic<br/>(unknown)"]
+    n_11dbc851b9f76e74["Basic test<br/>(unknown)"]
+    n_c27a6e981b96d694["score<br/>(unknown)"]
+    n_1866c6fe99f155ca["Item 0<br/>(unknown)"]
+    n_8047722ed3d77bcb["shark<br/>(unknown)"]
+    n_97dd66bd5e01c667 -->|"btn_start [Start] 100%"| n_29fe28a44cf4e03b
+    n_29fe28a44cf4e03b -->|"basic 100%"| n_11dbc851b9f76e74
+    n_11dbc851b9f76e74 -->|"btn_back [Back] 100%"| n_29fe28a44cf4e03b
+    n_29fe28a44cf4e03b -->|"drag_and_drop [drag drop] 100%"| n_c27a6e981b96d694
+    n_c27a6e981b96d694 -->|"btn_back [Back] 100%"| n_29fe28a44cf4e03b
+    n_29fe28a44cf4e03b -->|"list_view [list view] 100%"| n_1866c6fe99f155ca
+    n_1866c6fe99f155ca -->|"btn_back [Back] 100%"| n_29fe28a44cf4e03b
+    n_29fe28a44cf4e03b -->|"local_positioning [local posit 100%"| n_8047722ed3d77bcb

@@ -42,8 +42,22 @@ def _utc_iso() -> str:
 
 
 def _log_event(log_path: Path, payload: dict[str, Any]) -> None:
+    time_str = _utc_iso()
+    
+    # 1. 提取核心信息用于控制台格式化输出，增强人类可读性
+    kind = payload.get("kind", "unknown").upper()
+    msg = payload.get("msg", "")
+    
+    # 构建终端打印的额外信息（过滤掉基础字段，只展示关键数据）
+    extra_info = {k: v for k, v in payload.items() if k not in ["kind", "msg"]}
+    extra_str = f" | 附加数据: {extra_info}" if extra_info else ""
+    
+    # 在终端打印易读的日志
+    print(f"[{time_str}] [{kind}] {msg}{extra_str}")
+
+    # 2. 依然保留原始的 JSONL 文件写入逻辑（为了兼容数据分析）
     with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"time": _utc_iso(), **payload}, ensure_ascii=False) + "\n")
+        fh.write(json.dumps({"time": time_str, **payload}, ensure_ascii=False) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -335,50 +349,56 @@ class ColdStartExplorer:
     # ================================================================
 
     def _prepare(self) -> None:
-        """重启游戏、建立连接、记录环境信息。"""
-        _log_event(self.log_path, {
-            "kind": "prepare_start",
-            "project": self.config.project_name,
-            "engine": self.config.engine_type,
-            "package": self.config.package_name,
-        })
+            """重启游戏、建立连接、记录环境信息。"""
+            _log_event(self.log_path, {
+                "kind": "prepare_start",
+                "msg": "开始冷启动前置准备：准备重启游戏进程...",  # 【新增】易读描述
+                "project": self.config.project_name,
+                "engine": self.config.engine_type,
+                "package": self.config.package_name,
+            })
 
-        # 重启游戏
-        self.connector.force_stop_app()
-        time.sleep(1)
-        self.connector.start_app()
-        time.sleep(self.config.boot_wait_s)
+            # 重启游戏
+            self.connector.force_stop_app()
+            time.sleep(1)
+            self.connector.start_app()
+            time.sleep(self.config.boot_wait_s)
 
-        # 建立连接
-        self.connector.connect()
-        self._screen_size = self.connector.get_screen_size()
+            # 建立连接
+            self.connector.connect()
+            self._screen_size = self.connector.get_screen_size()
 
-        _log_event(self.log_path, {
-            "kind": "prepare_done",
-            "screen_size": list(self._screen_size),
-        })
+            _log_event(self.log_path, {
+                "kind": "prepare_done",
+                "msg": "前置准备完成：设备已连接，UI树接口已就绪。",  # 【新增】易读描述
+                "screen_size": list(self._screen_size),
+            })
 
     # ================================================================
     # 步骤 2：首屏采集
     # ================================================================
 
     def _capture_first_screen(self) -> PageObservation | None:
-        """采集首屏页面。"""
-        hierarchy = self.connector.dump_hierarchy(retries=5, wait_s=2.0)
-        if hierarchy is None:
-            _log_event(self.log_path, {"kind": "first_screen_failed"})
-            return None
+            """采集首屏页面。"""
+            hierarchy = self.connector.dump_hierarchy(retries=5, wait_s=2.0)
+            if hierarchy is None:
+                _log_event(self.log_path, {
+                    "kind": "first_screen_failed",
+                    "msg": "首屏采集失败：无法获取 Poco UI 树数据。" # 【新增】易读描述
+                })
+                return None
 
-        obs = self.observer.capture(hierarchy)
-        _log_event(self.log_path, {
-            "kind": "first_screen",
-            "signature": obs.signature,
-            "title": obs.title,
-            "total_nodes": len(obs.all_nodes),
-            "clickable_nodes": len(obs.clickable_nodes),
-            "text_nodes": len(obs.text_nodes),
-        })
-        return obs
+            obs = self.observer.capture(hierarchy)
+            _log_event(self.log_path, {
+                "kind": "first_screen",
+                "msg": f"首屏采集成功：当前所在页面识别为 '{obs.title}'", # 【新增】易读描述
+                "signature": obs.signature,
+                "title": obs.title,
+                "total_nodes": len(obs.all_nodes),
+                "clickable_nodes": len(obs.clickable_nodes),
+                "text_nodes": len(obs.text_nodes),
+            })
+            return obs
 
     # ================================================================
     # 步骤 3/4/5：递归探索
@@ -435,6 +455,7 @@ class ColdStartExplorer:
 
             _log_event(self.log_path, {
                 "kind": "page_analyzed",
+                "msg": f"页面分析完成：识别为 '{page_sem.category.value}' 类别，是否新页面: {is_new}", # 【新增】
                 "step": self._step_counter,
                 "signature": sig,
                 "page_id": page_node.page_id,
@@ -456,6 +477,7 @@ class ColdStartExplorer:
 
             _log_event(self.log_path, {
                 "kind": "actions_planned",
+                "msg": f"动作规划完毕：当前页面共生成 {len(candidates)} 个安全候选动作", # 【新增】
                 "signature": sig,
                 "candidate_count": len(candidates),
                 "candidates": [c.to_dict() for c in candidates[:5]],  # 前 5 个
@@ -487,6 +509,7 @@ class ColdStartExplorer:
                 if action.risk_level >= 2:
                     _log_event(self.log_path, {
                         "kind": "action_skipped_risk",
+                        "msg": f"跳过危险动作：忽略 '{action.label}' (风险等级 {action.risk_level})", # 【新增】
                         "signature": sig,
                         "action_key": action.action_key,
                         "risk_level": action.risk_level,
@@ -524,9 +547,9 @@ class ColdStartExplorer:
                 if action.role in {ControlRole.BACK, ControlRole.CLOSE} and execution.page_changed:
                     _log_event(self.log_path, {
                         "kind": "natural_return",
+                        "msg": "执行了回退动作，自然结束当前页面的探索",  # 【调整顺序】放到最前面
                         "signature": sig,
-                        "action_key": action.action_key,
-                        "msg": "执行了回退动作，自然结束当前页面的探索"
+                        "action_key": action.action_key
                     })
                     break  # 直接跳出 for 循环，随着 DFS 函数的 return 自然交还控制权
                     # 【↑↑↑ 核心修复代码结束 ↑↑↑】
@@ -553,9 +576,9 @@ class ColdStartExplorer:
                             if current_sig != sig:
                                 _log_event(self.log_path, {
                                     "kind": "stranded_aborted",
+                                    "msg": "回退失败，当前不在期望页面，终止该页面的剩余动作遍历",
                                     "expected_sig": sig,
                                     "actual_sig": current_sig,
-                                    "msg": "回退失败，当前不在期望页面，终止该页面的剩余动作遍历"
                                 })
                                 break  # 核心修复：强行跳出当前 candidates 循环，停止瞎点！
 
@@ -573,6 +596,7 @@ class ColdStartExplorer:
 
         _log_event(self.log_path, {
             "kind": "action_start",
+            "msg": f"[{self._step_counter}步] 开始执行：点击 '{action.label}' (作用: {action.role.value})", # 【新增】
             "step": self._step_counter,
             "signature": current_sig,
             "action_key": action.action_key,
@@ -591,6 +615,7 @@ class ColdStartExplorer:
             duration_ms = int((time.perf_counter() - start_time) * 1000)
             _log_event(self.log_path, {
                 "kind": "action_failed",
+                "msg": f"[{self._step_counter}步] 动作失败：{click_info}", # 【新增】
                 "step": self._step_counter,
                 "action_key": action.action_key,
                 "reason": click_info,
@@ -619,7 +644,7 @@ class ColdStartExplorer:
             }
             self.result.crashes.append(crash)
             self.result.stop_reason = "app_crash"
-            _log_event(self.log_path, {"kind": "app_crash", **crash})
+            _log_event(self.log_path, {"kind": "app_crash", "msg": "🚨 严重异常：游戏进程崩溃消失！", **crash}) # 【新增 msg】
             return ActionExecution(
                 step=self._step_counter,
                 action=action,
@@ -647,7 +672,7 @@ class ColdStartExplorer:
                 }
                 self.result.crashes.append(crash)
                 self.result.stop_reason = "rpc_broken"
-                _log_event(self.log_path, {"kind": "rpc_broken", **crash})
+                _log_event(self.log_path, {"kind": "rpc_broken", "msg": f"🚨 严重异常：Poco RPC 连接断开 - {exc}", **crash}) # 【新增 msg】
                 return None
 
         if after_hierarchy is None:
@@ -658,6 +683,7 @@ class ColdStartExplorer:
 
         _log_event(self.log_path, {
             "kind": "action_end",
+            "msg": f"[{self._step_counter}步] 执行完毕：耗时 {duration_ms}ms，页面是否发生跳转: {page_changed}", # 【新增】
             "step": self._step_counter,
             "signature": current_sig,
             "action_key": action.action_key,
@@ -700,6 +726,7 @@ class ColdStartExplorer:
                 if page_sem.category.value == "lobby":
                     _log_event(self.log_path, {
                         "kind": "go_back_aborted",
+                        "msg": "取消回退：当前处于大厅，禁止尝试向上一层回退", # 【新增】
                         "signature": current_obs.signature,
                         "reason": "cannot_go_back_from_lobby"
                     })
@@ -744,19 +771,19 @@ class ColdStartExplorer:
         # 达到最大步数
         if self._step_counter >= self.config.max_steps:
             self.result.stop_reason = "max_steps_reached"
-            _log_event(self.log_path, {"kind": "stop", "reason": "max_steps_reached"})
+            _log_event(self.log_path, {"kind": "stop", "msg": "达到最大探索步数，准备停止", "reason": "max_steps_reached"})
             return True
 
         # 达到最大页面数
         if self.result.graph.page_count >= self.config.max_pages:
             self.result.stop_reason = "max_pages_reached"
-            _log_event(self.log_path, {"kind": "stop", "reason": "max_pages_reached"})
+            _log_event(self.log_path, {"kind": "stop", "msg": "达到最大页面数量限制，准备停止", "reason": "max_pages_reached"})
             return True
 
         # 连续无新页面
         if self._consecutive_no_new >= self.config.no_new_page_limit:
             self.result.stop_reason = "no_new_pages"
-            _log_event(self.log_path, {"kind": "stop", "reason": "no_new_pages"})
+            _log_event(self.log_path, {"kind": "stop", "msg": "连续多次未发现新页面，认为探索完成，准备停止", "reason": "no_new_pages"})
             return True
 
         return False
@@ -789,5 +816,6 @@ class ColdStartExplorer:
 
         _log_event(self.log_path, {
             "kind": "outputs_saved",
+            "msg": f"探索结束：所有结果(截图/日志/状态图)已保存至目录 -> {self.output_dir}", # 【新增】
             "output_dir": str(self.output_dir),
         })

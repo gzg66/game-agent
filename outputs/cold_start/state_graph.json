@@ -1,0 +1,200 @@
+{
+  "pages": {
+    "97dd66bd5e01c667": {
+      "signature": "97dd66bd5e01c667",
+      "page_id": "page_000",
+      "title": "Start",
+      "category": "unknown",
+      "visit_count": 1,
+      "is_popup": false,
+      "is_high_risk": false,
+      "action_count": 2,
+      "first_seen_step": 0,
+      "metadata": {}
+    },
+    "29fe28a44cf4e03b": {
+      "signature": "29fe28a44cf4e03b",
+      "page_id": "page_001",
+      "title": "basic",
+      "category": "unknown",
+      "visit_count": 1,
+      "is_popup": false,
+      "is_high_risk": false,
+      "action_count": 7,
+      "first_seen_step": 1,
+      "metadata": {}
+    },
+    "11dbc851b9f76e74": {
+      "signature": "11dbc851b9f76e74",
+      "page_id": "page_002",
+      "title": "Basic test",
+      "category": "unknown",
+      "visit_count": 1,
+      "is_popup": false,
+      "is_high_risk": false,
+      "action_count": 3,
+      "first_seen_step": 2,
+      "metadata": {}
+    },
+    "c27a6e981b96d694": {
+      "signature": "c27a6e981b96d694",
+      "page_id": "page_003",
+      "title": "score",
+      "category": "unknown",
+      "visit_count": 1,
+      "is_popup": false,
+      "is_high_risk": false,
+      "action_count": 1,
+      "first_seen_step": 6,
+      "metadata": {}
+    },
+    "1866c6fe99f155ca": {
+      "signature": "1866c6fe99f155ca",
+      "page_id": "page_004",
+      "title": "Item 0",
+      "category": "unknown",
+      "visit_count": 1,
+      "is_popup": false,
+      "is_high_risk": false,
+      "action_count": 1,
+      "first_seen_step": 8,
+      "metadata": {}
+    },
+    "8047722ed3d77bcb": {
+      "signature": "8047722ed3d77bcb",
+      "page_id": "page_005",
+      "title": "shark",
+      "category": "unknown",
+      "visit_count": 1,
+      "is_popup": false,
+      "is_high_risk": false,
+      "action_count": 4,
+      "first_seen_step": 10,
+      "metadata": {}
+    }
+  },
+  "edges": [
+    {
+      "from_signature": "97dd66bd5e01c667",
+      "to_signature": "29fe28a44cf4e03b",
+      "action_key": "root/1:Canvas/0:beginPanel/0:btn_start|btn_start|Start|Button",
+      "action_label": "btn_start [Start]",
+      "action_role": "primary_entry",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "29fe28a44cf4e03b",
+      "to_signature": "11dbc851b9f76e74",
+      "action_key": "root/1:Canvas/0:levelSelect/0:basic|basic|basic|Button",
+      "action_label": "basic",
+      "action_role": "unknown",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "11dbc851b9f76e74",
+      "to_signature": "11dbc851b9f76e74",
+      "action_key": "root/1:Canvas/0:plays/0:playBasic/2:pos_input|pos_input|Enter text...|InputField",
+      "action_label": "pos_input [Enter text...]",
+      "action_role": "primary_entry",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": false,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "11dbc851b9f76e74",
+      "to_signature": "11dbc851b9f76e74",
+      "action_key": "root/1:Canvas/0:plays/0:playBasic/1:star_single|star_single||Image",
+      "action_label": "star_single",
+      "action_role": "primary_entry",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": false,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "11dbc851b9f76e74",
+      "to_signature": "29fe28a44cf4e03b",
+      "action_key": "root/1:Canvas/1:globalControl/0:btn_back|btn_back|Back|Button",
+      "action_label": "btn_back [Back]",
+      "action_role": "back",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "29fe28a44cf4e03b",
+      "to_signature": "c27a6e981b96d694",
+      "action_key": "root/1:Canvas/0:levelSelect/1:drag_and_drop|drag_and_drop|drag drop|Button",
+      "action_label": "drag_and_drop [drag drop]",
+      "action_role": "unknown",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "c27a6e981b96d694",
+      "to_signature": "29fe28a44cf4e03b",
+      "action_key": "root/1:Canvas/1:globalControl/0:btn_back|btn_back|Back|Button",
+      "action_label": "btn_back [Back]",
+      "action_role": "back",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "29fe28a44cf4e03b",
+      "to_signature": "1866c6fe99f155ca",
+      "action_key": "root/1:Canvas/0:levelSelect/2:list_view|list_view|list view|Button",
+      "action_label": "list_view [list view]",
+      "action_role": "unknown",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "1866c6fe99f155ca",
+      "to_signature": "29fe28a44cf4e03b",
+      "action_key": "root/1:Canvas/1:globalControl/0:btn_back|btn_back|Back|Button",
+      "action_label": "btn_back [Back]",
+      "action_role": "back",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "29fe28a44cf4e03b",
+      "to_signature": "8047722ed3d77bcb",
+      "action_key": "root/1:Canvas/0:levelSelect/3:local_positioning|local_positioning|local positioning|Button",
+      "action_label": "local_positioning [local positioning]",
+      "action_role": "unknown",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    }
+  ],
+  "page_count": 6,
+  "edge_count": 10
+}
