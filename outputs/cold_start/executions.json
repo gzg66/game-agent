@@ -1,0 +1,110 @@
+[
+  {
+    "step": 1,
+    "action_key": "root/1:Canvas/0:beginPanel/0:btn_start|btn_start|Start|Button",
+    "action_label": "btn_start [Start]",
+    "action_role": "primary_entry",
+    "page_before": "97dd66bd5e01c667",
+    "page_after": "29fe28a44cf4e03b",
+    "success": true,
+    "page_changed": true,
+    "click_info": "poco:btn_start",
+    "duration_ms": 5407
+  },
+  {
+    "step": 2,
+    "action_key": "root/1:Canvas/2:globalControl/0:btn_back|btn_back|Back|Button",
+    "action_label": "btn_back [Back]",
+    "action_role": "back",
+    "page_before": "29fe28a44cf4e03b",
+    "page_after": "97dd66bd5e01c667",
+    "success": true,
+    "page_changed": true,
+    "click_info": "poco:btn_back",
+    "duration_ms": 3245
+  },
+  {
+    "step": 3,
+    "action_key": "root/1:Canvas/0:levelSelect/0:basic|basic|basic|Button",
+    "action_label": "basic",
+    "action_role": "unknown",
+    "page_before": "29fe28a44cf4e03b",
+    "page_after": "97dd66bd5e01c667",
+    "success": true,
+    "page_changed": true,
+    "click_info": "tap:136,340",
+    "duration_ms": 2103
+  },
+  {
+    "step": 4,
+    "action_key": "root/1:Canvas/0:levelSelect/1:drag_and_drop|drag_and_drop|drag drop|Button",
+    "action_label": "drag_and_drop [drag drop]",
+    "action_role": "unknown",
+    "page_before": "29fe28a44cf4e03b",
+    "page_after": "97dd66bd5e01c667",
+    "success": true,
+    "page_changed": true,
+    "click_info": "tap:136,540",
+    "duration_ms": 2102
+  },
+  {
+    "step": 5,
+    "action_key": "root/1:Canvas/0:levelSelect/2:list_view|list_view|list view|Button",
+    "action_label": "list_view [list view]",
+    "action_role": "unknown",
+    "page_before": "29fe28a44cf4e03b",
+    "page_after": "97dd66bd5e01c667",
+    "success": true,
+    "page_changed": true,
+    "click_info": "tap:136,736",
+    "duration_ms": 2113
+  },
+  {
+    "step": 6,
+    "action_key": "root/1:Canvas/0:levelSelect/3:local_positioning|local_positioning|local positioning|Button",
+    "action_label": "local_positioning [local positioning]",
+    "action_role": "unknown",
+    "page_before": "29fe28a44cf4e03b",
+    "page_after": "97dd66bd5e01c667",
+    "success": true,
+    "page_changed": true,
+    "click_info": "tap:136,945",
+    "duration_ms": 2100
+  },
+  {
+    "step": 7,
+    "action_key": "root/1:Canvas/0:levelSelect/4:wait_ui|wait_ui|wait UI|Button",
+    "action_label": "wait_ui [wait UI]",
+    "action_role": "unknown",
+    "page_before": "29fe28a44cf4e03b",
+    "page_after": "97dd66bd5e01c667",
+    "success": true,
+    "page_changed": true,
+    "click_info": "tap:136,1139",
+    "duration_ms": 2102
+  },
+  {
+    "step": 8,
+    "action_key": "root/1:Canvas/0:levelSelect/5:wait_ui2|wait_ui2|wait UI 2|Button",
+    "action_label": "wait_ui2 [wait UI 2]",
+    "action_role": "unknown",
+    "page_before": "29fe28a44cf4e03b",
+    "page_after": "97dd66bd5e01c667",
+    "success": true,
+    "page_changed": true,
+    "click_info": "tap:286,340",
+    "duration_ms": 2098
+  },
+  {
+    "step": 9,
+    "action_key": "root/1:Canvas/2:globalControl/0:btn_back|btn_back|Back|Button",
+    "action_label": "btn_back [Back]",
+    "action_role": "back",
+    "page_before": "97dd66bd5e01c667",
+    "page_after": "97dd66bd5e01c667",
+    "success": true,
+    "page_changed": false,
+    "click_info": "poco:btn_back",
+    "duration_ms": 3249
+  }
+]

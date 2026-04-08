@@ -1,0 +1,140 @@
+{
+  "pages": {
+    "97dd66bd5e01c667": {
+      "signature": "97dd66bd5e01c667",
+      "page_id": "page_000",
+      "title": "Start",
+      "category": "unknown",
+      "visit_count": 1,
+      "is_popup": false,
+      "is_high_risk": false,
+      "action_count": 2,
+      "first_seen_step": 0,
+      "metadata": {}
+    },
+    "29fe28a44cf4e03b": {
+      "signature": "29fe28a44cf4e03b",
+      "page_id": "page_001",
+      "title": "basic",
+      "category": "unknown",
+      "visit_count": 1,
+      "is_popup": false,
+      "is_high_risk": false,
+      "action_count": 7,
+      "first_seen_step": 1,
+      "metadata": {}
+    }
+  },
+  "edges": [
+    {
+      "from_signature": "97dd66bd5e01c667",
+      "to_signature": "29fe28a44cf4e03b",
+      "action_key": "root/1:Canvas/0:beginPanel/0:btn_start|btn_start|Start|Button",
+      "action_label": "btn_start [Start]",
+      "action_role": "primary_entry",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "29fe28a44cf4e03b",
+      "to_signature": "97dd66bd5e01c667",
+      "action_key": "root/1:Canvas/2:globalControl/0:btn_back|btn_back|Back|Button",
+      "action_label": "btn_back [Back]",
+      "action_role": "back",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "29fe28a44cf4e03b",
+      "to_signature": "97dd66bd5e01c667",
+      "action_key": "root/1:Canvas/0:levelSelect/0:basic|basic|basic|Button",
+      "action_label": "basic",
+      "action_role": "unknown",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "29fe28a44cf4e03b",
+      "to_signature": "97dd66bd5e01c667",
+      "action_key": "root/1:Canvas/0:levelSelect/1:drag_and_drop|drag_and_drop|drag drop|Button",
+      "action_label": "drag_and_drop [drag drop]",
+      "action_role": "unknown",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "29fe28a44cf4e03b",
+      "to_signature": "97dd66bd5e01c667",
+      "action_key": "root/1:Canvas/0:levelSelect/2:list_view|list_view|list view|Button",
+      "action_label": "list_view [list view]",
+      "action_role": "unknown",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "29fe28a44cf4e03b",
+      "to_signature": "97dd66bd5e01c667",
+      "action_key": "root/1:Canvas/0:levelSelect/3:local_positioning|local_positioning|local positioning|Button",
+      "action_label": "local_positioning [local positioning]",
+      "action_role": "unknown",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "29fe28a44cf4e03b",
+      "to_signature": "97dd66bd5e01c667",
+      "action_key": "root/1:Canvas/0:levelSelect/4:wait_ui|wait_ui|wait UI|Button",
+      "action_label": "wait_ui [wait UI]",
+      "action_role": "unknown",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "29fe28a44cf4e03b",
+      "to_signature": "97dd66bd5e01c667",
+      "action_key": "root/1:Canvas/0:levelSelect/5:wait_ui2|wait_ui2|wait UI 2|Button",
+      "action_label": "wait_ui2 [wait UI 2]",
+      "action_role": "unknown",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": true,
+      "risk_level": 0,
+      "metadata": {}
+    },
+    {
+      "from_signature": "97dd66bd5e01c667",
+      "to_signature": "97dd66bd5e01c667",
+      "action_key": "root/1:Canvas/2:globalControl/0:btn_back|btn_back|Back|Button",
+      "action_label": "btn_back [Back]",
+      "action_role": "back",
+      "success_count": 1,
+      "fail_count": 0,
+      "is_page_changed": false,
+      "risk_level": 0,
+      "metadata": {}
+    }
+  ],
+  "page_count": 2,
+  "edge_count": 9
+}

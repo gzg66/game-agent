@@ -1,0 +1,66 @@
+# ============================================================
+# 冷启动探索 - 游戏配置
+#
+# 只需修改本文件即可切换不同游戏、不同引擎、不同设备。
+# 支持引擎类型: unity3d / cocos_creator / cocos2dx_js / cocos2dx_lua
+# ============================================================
+
+# ---- 游戏标识 ----
+project_name: demo_unity_game
+engine_type: unity3d
+package_name: com.NetEase
+activity_name: com.NetEase/com.unity3d.player.UnityPlayerActivity
+
+# ---- 设备配置 ----
+device:
+  uri: "Android:///emulator-5554"
+  serial: emulator-5554
+
+# ---- Poco 连接配置 ----
+# port 设为 0 表示使用引擎默认端口（unity3d=5001, cocos=5003, lua=15004）
+connection:
+  host: localhost
+  port: 0
+
+# ---- 探索参数 ----
+exploration:
+  max_steps: 200           # 最大探索步数
+  max_pages: 30            # 最大页面数
+  max_actions_per_page: 8  # 每页最多尝试的动作数
+  boot_wait_s: 8.0         # 启动等待秒数
+  action_wait_s: 2.0       # 每次动作后等待秒数
+  no_new_page_limit: 10    # 连续无新页面步数，达到则停止
+
+# ---- 安全配置 ----
+safety:
+  dangerous_keywords:
+    - 充值
+    - 支付
+    - 购买
+    - 删除
+    - 退出登录
+    - recharge
+    - pay
+    - purchase
+    - delete
+  safe_priority_keywords:
+    - 关闭
+    - 确认
+    - 下一步
+    - 开始
+    - 进入
+    - 领取
+    - 跳过
+    - 返回
+    - close
+    - confirm
+    - next
+    - start
+    - enter
+    - claim
+    - skip
+    - back
+    - ok
+
+# ---- 输出目录 ----
+output_dir: outputs/cold_start

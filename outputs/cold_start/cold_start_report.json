@@ -1,0 +1,106 @@
+{
+  "overview": {
+    "status": "completed",
+    "stop_reason": "exploration_completed",
+    "total_steps": 0,
+    "new_pages_found": 2,
+    "total_pages": 2,
+    "total_edges": 9,
+    "total_executions": 9,
+    "crash_count": 0,
+    "started_at": "2026-04-07T10:31:01+00:00",
+    "finished_at": "2026-04-07T10:33:30+00:00"
+  },
+  "page_categories": {
+    "unknown": 2
+  },
+  "module_entries": [],
+  "control_role_stats": {
+    "primary_entry": 1,
+    "back": 2,
+    "unknown": 6
+  },
+  "high_value_transitions": [
+    {
+      "from_page": "Start",
+      "from_category": "unknown",
+      "to_page": "basic",
+      "to_category": "unknown",
+      "action": "btn_start [Start]",
+      "role": "primary_entry",
+      "success_rate": "100%"
+    },
+    {
+      "from_page": "basic",
+      "from_category": "unknown",
+      "to_page": "Start",
+      "to_category": "unknown",
+      "action": "btn_back [Back]",
+      "role": "back",
+      "success_rate": "100%"
+    },
+    {
+      "from_page": "basic",
+      "from_category": "unknown",
+      "to_page": "Start",
+      "to_category": "unknown",
+      "action": "basic",
+      "role": "unknown",
+      "success_rate": "100%"
+    },
+    {
+      "from_page": "basic",
+      "from_category": "unknown",
+      "to_page": "Start",
+      "to_category": "unknown",
+      "action": "drag_and_drop [drag drop]",
+      "role": "unknown",
+      "success_rate": "100%"
+    },
+    {
+      "from_page": "basic",
+      "from_category": "unknown",
+      "to_page": "Start",
+      "to_category": "unknown",
+      "action": "list_view [list view]",
+      "role": "unknown",
+      "success_rate": "100%"
+    },
+    {
+      "from_page": "basic",
+      "from_category": "unknown",
+      "to_page": "Start",
+      "to_category": "unknown",
+      "action": "local_positioning [local positioning]",
+      "role": "unknown",
+      "success_rate": "100%"
+    },
+    {
+      "from_page": "basic",
+      "from_category": "unknown",
+      "to_page": "Start",
+      "to_category": "unknown",
+      "action": "wait_ui [wait UI]",
+      "role": "unknown",
+      "success_rate": "100%"
+    },
+    {
+      "from_page": "basic",
+      "from_category": "unknown",
+      "to_page": "Start",
+      "to_category": "unknown",
+      "action": "wait_ui2 [wait UI 2]",
+      "role": "unknown",
+      "success_rate": "100%"
+    }
+  ],
+  "high_frequency_pages": [],
+  "popup_pages": [],
+  "high_risk_pages": [],
+  "high_risk_actions": [],
+  "crashes": [],
+  "suggestions": [
+    "发现页面过少，建议增大 max_steps 或调整 action_wait_s",
+    "未识别类型的页面占比过高，建议丰富 page_type_hints 配置"
+  ]
+}
