@@ -53,7 +53,7 @@ class GameConfig:
     # ---- 探索参数 ----
     max_steps: int = 200  # 最大探索步数
     max_pages: int = 30  # 最大页面数
-    max_actions_per_page: int = 8  # 每页最多尝试的动作数
+    max_actions_per_page: int = 20# 每页最多尝试的动作数
     boot_wait_s: float = 8.0  # 启动等待秒数
     action_wait_s: float = 2.0  # 每次动作后等待秒数
     no_new_page_limit: int = 10  # 连续无新页面步数，达到则停止

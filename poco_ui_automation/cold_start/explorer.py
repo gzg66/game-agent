@@ -385,130 +385,179 @@ class ColdStartExplorer:
     # ================================================================
 
     def _explore_from(
-        self,
-        observation: PageObservation,
-        depth: int,
-        path_stack: list[str],
-    ) -> None:
-        """从一个页面开始进行受控探索。"""
-        sig = observation.signature
+            self,
+            observation: PageObservation,
+            depth: int,
+            path_stack: list[str],
+        ) -> None:
+            """从一个页面开始进行受控探索。"""
+            sig = observation.signature
 
-        # 防止循环
-        if sig in path_stack:
-            return
+            # 防止循环
+            if sig in path_stack:
+                return
 
-        # 检查停止条件
-        if self._should_stop():
-            return
-
-        # ---- 语义分析 ----
-        page_sem = self.semantic.analyze(observation)
-
-        # ---- 记录到状态图 ----
-        page_node, is_new = self.result.graph.add_page(
-            signature=sig,
-            title=observation.title,
-            category=page_sem.category.value,
-            is_popup=page_sem.has_popup,
-            is_high_risk=page_sem.has_high_risk,
-            action_count=len(observation.clickable_nodes),
-            step=self._step_counter,
-        )
-
-        if is_new:
-            self.result.new_pages_found += 1
-            self._consecutive_no_new = 0
-        else:
-            self._consecutive_no_new += 1
-
-        # 记录页面语义
-        self.result.page_semantics[sig] = {
-            "page_id": page_node.page_id,
-            "title": observation.title,
-            "category": page_sem.category.value,
-            "category_confidence": page_sem.category_confidence,
-            "has_popup": page_sem.has_popup,
-            "has_high_risk": page_sem.has_high_risk,
-            "clickable_count": len(observation.clickable_nodes),
-            "text_count": len(observation.text_nodes),
-        }
-
-        _log_event(self.log_path, {
-            "kind": "page_analyzed",
-            "step": self._step_counter,
-            "signature": sig,
-            "page_id": page_node.page_id,
-            "title": observation.title,
-            "category": page_sem.category.value,
-            "is_new": is_new,
-            "depth": depth,
-            "has_popup": page_sem.has_popup,
-            "has_high_risk": page_sem.has_high_risk,
-        })
-
-        # 已经探索过这个页面的所有动作 → 跳过
-        if sig in self._explored_pages:
-            return
-        self._explored_pages.add(sig)
-
-        # ---- 生成候选动作 ----
-        candidates = self.planner.plan(page_sem)
-
-        _log_event(self.log_path, {
-            "kind": "actions_planned",
-            "signature": sig,
-            "candidate_count": len(candidates),
-            "candidates": [c.to_dict() for c in candidates[:5]],  # 前 5 个
-        })
-
-        # ---- 逐个执行候选动作 ----
-        for action in candidates:
+            # 检查停止条件
             if self._should_stop():
-                break
+                return
 
-            # 安全检查：跳过高风险
-            if action.risk_level >= 2:
-                _log_event(self.log_path, {
-                    "kind": "action_skipped_risk",
-                    "signature": sig,
-                    "action_key": action.action_key,
-                    "risk_level": action.risk_level,
-                })
-                continue
+            # ---- 语义分析 ----
+            page_sem = self.semantic.analyze(observation)
 
-            execution = self._execute_action(action, sig)
-            if execution is None:
-                continue
-
-            self.result.executions.append(execution)
-
-            # 记录到状态图
-            self.result.graph.add_transition(
-                from_sig=sig,
-                to_sig=execution.page_after or sig,
-                action_key=action.action_key,
-                action_label=action.label,
-                action_role=action.role.value,
-                success=execution.success,
-                page_changed=execution.page_changed,
-                risk_level=action.risk_level,
+            # ---- 记录到状态图 ----
+            page_node, is_new = self.result.graph.add_page(
+                signature=sig,
+                title=observation.title,
+                category=page_sem.category.value,
+                is_popup=page_sem.has_popup,
+                is_high_risk=page_sem.has_high_risk,
+                action_count=len(observation.clickable_nodes),
+                step=self._step_counter,
             )
 
-            self.planner.mark_explored(sig, action.action_key)
+            if is_new:
+                self.result.new_pages_found += 1
+                self._consecutive_no_new = 0
+            else:
+                self._consecutive_no_new += 1
 
-            # 如果页面变化了，递归探索新页面
-            if execution.page_changed and execution.page_after:
-                after_hierarchy = self.connector.dump_hierarchy()
-                if after_hierarchy:
-                    after_obs = self.observer.capture(after_hierarchy)
-                    self._explore_from(
-                        after_obs,
-                        depth=depth + 1,
-                        path_stack=[*path_stack, sig],
-                    )
+            # 记录页面语义
+            self.result.page_semantics[sig] = {
+                "page_id": page_node.page_id,
+                "title": observation.title,
+                "category": page_sem.category.value,
+                "category_confidence": page_sem.category_confidence,
+                "has_popup": page_sem.has_popup,
+                "has_high_risk": page_sem.has_high_risk,
+                "clickable_count": len(observation.clickable_nodes),
+                "text_count": len(observation.text_nodes),
+            }
 
-                    # 探索完子页面后，尝试返回
-                    self._try_go_back(sig)
+            _log_event(self.log_path, {
+                "kind": "page_analyzed",
+                "step": self._step_counter,
+                "signature": sig,
+                "page_id": page_node.page_id,
+                "title": observation.title,
+                "category": page_sem.category.value,
+                "is_new": is_new,
+                "depth": depth,
+                "has_popup": page_sem.has_popup,
+                "has_high_risk": page_sem.has_high_risk,
+            })
+
+            # 【修改点 1：移除原本的“页面一波流”粗暴截断机制】
+            # if sig in self._explored_pages:
+            #     return
+            # self._explored_pages.add(sig)
+
+            # ---- 生成候选动作 ----
+            candidates = self.planner.plan(page_sem)
+
+            _log_event(self.log_path, {
+                "kind": "actions_planned",
+                "signature": sig,
+                "candidate_count": len(candidates),
+                "candidates": [c.to_dict() for c in candidates[:5]],  # 前 5 个
+            })
+
+            # 【修改点 2：新增基于动作集的精细化退出判定】
+            # 筛选出当前页面的安全动作（风险等级 < 2）
+            safe_candidates = [c for c in candidates if c.risk_level < 2]
+
+            # 如果没有安全动作，或者所有的安全动作都已经探索过了，才判定这个页面不需要继续驻留
+            if not safe_candidates:
+                return
+
+            all_explored = all(self.planner.is_explored(sig, c.action_key) for c in safe_candidates)
+            if all_explored:
+                _log_event(self.log_path, {
+                    "kind": "page_skipped_all_explored",
+                    "signature": sig,
+                    "msg": "当前页面所有安全的动作均已探索完毕"
+                })
+                return
+
+            # ---- 逐个执行候选动作 ----
+            for action in candidates:
+                if self._should_stop():
+                    break
+
+                # 安全检查：跳过高风险
+                if action.risk_level >= 2:
+                    _log_event(self.log_path, {
+                        "kind": "action_skipped_risk",
+                        "signature": sig,
+                        "action_key": action.action_key,
+                        "risk_level": action.risk_level,
+                    })
+                    continue
+                
+                # 【修改点 3：在循环中实时跳过已经尝试过的动作分支】
+                if self.planner.is_explored(sig, action.action_key):
+                    continue
+
+                execution = self._execute_action(action, sig)
+                if execution is None:
+                    continue
+
+                self.result.executions.append(execution)
+
+                # 记录到状态图
+                self.result.graph.add_transition(
+                    from_sig=sig,
+                    to_sig=execution.page_after or sig,
+                    action_key=action.action_key,
+                    action_label=action.label,
+                    action_role=action.role.value,
+                    success=execution.success,
+                    page_changed=execution.page_changed,
+                    risk_level=action.risk_level,
+                )
+
+                self.planner.mark_explored(sig, action.action_key)
+
+                # 【↓↓↓ 核心修复代码：插入在这里 ↓↓↓】
+                # 回退短路机制：如果我们执行的是兜底的返回/关闭动作，并且成功发生了跳转，
+                # 说明当前页面的生命周期已经自然结束，完成了向上一层的物理退回。
+                # 绝对不能把它当成新分支去正向递归！
+                if action.role in {ControlRole.BACK, ControlRole.CLOSE} and execution.page_changed:
+                    _log_event(self.log_path, {
+                        "kind": "natural_return",
+                        "signature": sig,
+                        "action_key": action.action_key,
+                        "msg": "执行了回退动作，自然结束当前页面的探索"
+                    })
+                    break  # 直接跳出 for 循环，随着 DFS 函数的 return 自然交还控制权
+                    # 【↑↑↑ 核心修复代码结束 ↑↑↑】
+
+                # 如果页面变化了，递归探索新页面
+                if execution.page_changed and execution.page_after:
+                    after_hierarchy = self.connector.dump_hierarchy()
+                    if after_hierarchy:
+                        after_obs = self.observer.capture(after_hierarchy)
+                        self._explore_from(
+                            after_obs,
+                            depth=depth + 1,
+                            path_stack=[*path_stack, sig],
+                        )
+
+                        # 【修改修复：探索完子页面后，尝试返回并强制校验状态】
+                        back_success = self._try_go_back(sig)
+                        
+                        if not back_success:
+                            # 再次通过实时截图确认是否真的回去了
+                            current_hierarchy = self.connector.dump_hierarchy()
+                            current_sig = self.observer.capture(current_hierarchy).signature if current_hierarchy else ""
+                            
+                            if current_sig != sig:
+                                _log_event(self.log_path, {
+                                    "kind": "stranded_aborted",
+                                    "expected_sig": sig,
+                                    "actual_sig": current_sig,
+                                    "msg": "回退失败，当前不在期望页面，终止该页面的剩余动作遍历"
+                                })
+                                break  # 核心修复：强行跳出当前 candidates 循环，停止瞎点！
 
     # ================================================================
     # 动作执行
@@ -633,42 +682,54 @@ class ColdStartExplorer:
     # ================================================================
 
     def _try_go_back(self, expected_sig: str, max_attempts: int = 3) -> bool:
-        """尝试返回到期望的页面。"""
-        for attempt in range(max_attempts):
+            """尝试返回到期望的页面。"""
+            for attempt in range(max_attempts):
+                hierarchy = self.connector.dump_hierarchy()
+                if hierarchy is None:
+                    return False
+
+                current_obs = self.observer.capture(hierarchy)
+                if current_obs.signature == expected_sig:
+                    return True
+
+                # 语义分析当前页面
+                page_sem = self.semantic.analyze(current_obs)
+
+                # 【新增逻辑：枢纽节点拦截】
+                # 如果当前已经处于主页面（大厅），则禁止尝试通过“返回”或“物理返回键”向上一层（如登录页）回退
+                if page_sem.category.value == "lobby":
+                    _log_event(self.log_path, {
+                        "kind": "go_back_aborted",
+                        "signature": current_obs.signature,
+                        "reason": "cannot_go_back_from_lobby"
+                    })
+                    return False
+
+                # 尝试点击 back/close 按钮
+                for sem in page_sem.node_semantics:
+                    if sem.role in {ControlRole.BACK, ControlRole.CLOSE}:
+                        ok, _ = self.connector.click_node(
+                            sem.node.name, sem.node.pos, self._screen_size
+                        )
+                        if ok:
+                            time.sleep(self.config.action_wait_s)
+                            after = self.connector.dump_hierarchy()
+                            if after:
+                                after_obs = self.observer.capture(after)
+                                if after_obs.signature == expected_sig:
+                                    return True
+                        break
+
+                # 兜底：Android 返回键
+                self.connector.press_back()
+                time.sleep(self.config.action_wait_s)
+
+            # 最后检查一次
             hierarchy = self.connector.dump_hierarchy()
-            if hierarchy is None:
-                return False
-
-            current_obs = self.observer.capture(hierarchy)
-            if current_obs.signature == expected_sig:
-                return True
-
-            # 尝试点击 back/close 按钮
-            page_sem = self.semantic.analyze(current_obs)
-            for sem in page_sem.node_semantics:
-                if sem.role in {ControlRole.BACK, ControlRole.CLOSE}:
-                    ok, _ = self.connector.click_node(
-                        sem.node.name, sem.node.pos, self._screen_size
-                    )
-                    if ok:
-                        time.sleep(self.config.action_wait_s)
-                        after = self.connector.dump_hierarchy()
-                        if after:
-                            after_obs = self.observer.capture(after)
-                            if after_obs.signature == expected_sig:
-                                return True
-                    break
-
-            # 兜底：Android 返回键
-            self.connector.press_back()
-            time.sleep(self.config.action_wait_s)
-
-        # 最后检查一次
-        hierarchy = self.connector.dump_hierarchy()
-        if hierarchy:
-            obs = self.observer.capture(hierarchy)
-            return obs.signature == expected_sig
-        return False
+            if hierarchy:
+                obs = self.observer.capture(hierarchy)
+                return obs.signature == expected_sig
+            return False
 
     # ================================================================
     # 停止条件
