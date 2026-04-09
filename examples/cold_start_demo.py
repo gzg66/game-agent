@@ -11,6 +11,9 @@
     python examples/cold_start_demo.py --config examples/cold_start_game_config.yaml \
         --max-steps 100 --max-pages 20 --output outputs/my_cold_start
 
+    # 启用视觉大模型进行 SoM 语义分析 (新增)
+    python examples/cold_start_demo.py --enable-vision --llm-api-key "sk-xxxxxx"
+
 切换游戏的方式：
     1. 复制 cold_start_game_config.yaml 并修改 engine_type / package_name / activity_name 等
     2. 运行时指定 --config 为新配置文件即可
@@ -20,8 +23,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
+
+import base64
+from google import genai
+from google.genai import types
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -32,6 +40,50 @@ from poco_ui_automation.cold_start import (
     ColdStartReportBuilder,
     GameConfig,
 )
+
+
+# =======================================================================
+# 【修改】使用 google-genai SDK 接入 gemini-3-flash-preview
+# =======================================================================
+class VisionLLMClient:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        # 根据官方 SDK，初始化 Client
+        self.client = genai.Client(
+            vertexai=True,
+            api_key=self.api_key,
+            http_options=types.HttpOptions(api_version='v1')
+        )
+
+    def chat(self, prompt: str, image_base64: str) -> str:
+        print("[视觉大模型] 正在后台异步分析页面未知节点...")
+        
+        try:
+            # 将 base64 字符串解码回图片原始字节流
+            image_bytes = base64.b64decode(image_base64)
+            
+            # 使用截图中的方式构造请求
+            response = self.client.models.generate_content(
+                model='gemini-3-flash-preview',
+                contents=[
+                    types.Part.from_bytes(
+                        data=image_bytes,
+                        mime_type='image/jpeg',
+                    ),
+                    prompt,
+                ],
+                # 强迫模型严格按照 Prompt 要求的 JSON 格式输出，防止包含 Markdown 代码块标记
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                ),
+            )
+            
+            print("[视觉大模型] 分析完成！")
+            return response.text
+            
+        except Exception as e:
+            print(f"[视觉大模型] 请求失败: {e}")
+            return "{}"
 
 
 def main() -> None:
@@ -57,6 +109,11 @@ def main() -> None:
     parser.add_argument("--boot-wait", type=float, default=None, help="启动等待秒数")
     parser.add_argument("--action-wait", type=float, default=None, help="动作等待秒数")
     parser.add_argument("--output", default=None, help="输出目录")
+    
+    # 【新增】视觉大模型相关参数
+    parser.add_argument("--enable-vision", action="store_true", help="是否启用视觉大模型进行 SoM 语义分析")
+    parser.add_argument("--llm-api-key", default=None, help="大模型 API Key（可选，也可通过环境变量 LLM_API_KEY 配置）")
+
     args = parser.parse_args()
 
     # 加载配置
@@ -106,11 +163,21 @@ def main() -> None:
     print(f"[冷启动] Poco: {config.poco_host}:{config.effective_poco_port()}")
     print(f"[冷启动] 最大步数: {config.max_steps}, 最大页面: {config.max_pages}")
     print(f"[冷启动] 输出目录: {config.output_dir}")
+    
+    # 【新增】初始化 LLM Client
+    llm_client = None
+    if args.enable_vision:
+        api_key = args.llm_api_key or os.environ.get("LLM_API_KEY", "dummy_key")
+        print(f"[冷启动] 👁️ 已启用视觉大模型增强，API_KEY: {api_key[:5]}***")
+        llm_client = VisionLLMClient(api_key=api_key)
+    else:
+        print("[冷启动] ℹ️ 未启用视觉大模型，仅使用纯规则快车道进行探索。")
     print()
 
     # 执行冷启动探索
     print("[冷启动] ========== 开始冷启动探索 ==========")
-    explorer = ColdStartExplorer(config)
+    # 【修改】将 llm_client 注入到 Explorer 中
+    explorer = ColdStartExplorer(config, llm_client=llm_client)
     result = explorer.run()
 
     # 生成报告

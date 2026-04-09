@@ -72,6 +72,7 @@ class PageObservation:
     root_node_name: str = ""
     captured_at: datetime = field(default_factory=_utc_now)
     metadata: dict[str, Any] = field(default_factory=dict)
+    screenshot_path: str = ""  # 【新增】存储本次观测的截图路径
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +86,7 @@ class ObservationCapture:
     """
 
     @staticmethod
-    def capture(hierarchy: dict[str, Any]) -> PageObservation:
+    def capture(hierarchy: dict[str, Any], screenshot_path: str = "") -> PageObservation: # 【修改】新增参数
         """对一个 hierarchy dump 执行全量观测。"""
         all_nodes = _extract_all_nodes(hierarchy)
         clickable = [n for n in all_nodes if n.interactive]
@@ -102,6 +103,7 @@ class ObservationCapture:
             clickable_nodes=clickable,
             text_nodes=texts,
             root_node_name=root_name,
+            screenshot_path=screenshot_path, # 【修改】保存截图路径
         )
 
 

@@ -29,8 +29,9 @@ from .config import (
     GameConfig,
 )
 from .observation import ObservationCapture, PageObservation
-from .semantic import ControlRole, PageSemanticInfo, SemanticAnalyzer
 from .state_graph import ExplorationGraph
+from .semantic import ControlRole # 【修改】去掉了 SemanticAnalyzer
+from .enhanced_semantic import EnhancedSemanticAnalyzer # 【新增】引入新的分析器
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +142,17 @@ class GameConnector:
     def press_back(self) -> None:
         self.adb_cmd("shell", "input", "keyevent", "4")
 
+    def snapshot(self, save_path: str) -> bool:
+        """【新增】通过 adb 截图并保存到本地"""
+        try:
+            temp_path = "/sdcard/temp_screen_agent.png"
+            self.adb_cmd("shell", "screencap", "-p", temp_path)
+            # pull 到本地
+            subprocess.run([self._get_adb(), "-s", self.config.device_serial, "pull", temp_path, save_path], check=False, capture_output=True)
+            return Path(save_path).exists()
+        except Exception:
+            return False
+
     def app_is_running(self) -> bool:
         result = self.adb_cmd("shell", "pidof", self.config.package_name)
         return bool(result.stdout.strip())
@@ -205,6 +217,7 @@ class ActionExecution:
         action: CandidateAction,
         page_before: str,
         page_after: str | None,
+        after_screenshot_path: str,
         success: bool,
         page_changed: bool,
         click_info: str,
@@ -214,6 +227,7 @@ class ActionExecution:
         self.action = action
         self.page_before = page_before
         self.page_after = page_after
+        self.after_screenshot_path = after_screenshot_path
         self.success = success
         self.page_changed = page_changed
         self.click_info = click_info
@@ -286,17 +300,19 @@ class ColdStartExplorer:
     6. 结果验收与报告
     """
 
-    def __init__(self, config: GameConfig) -> None:
+    def __init__(self, config: GameConfig, llm_client: Any = None) -> None: # 【修改】增加 llm_client 参数
         self.config = config
         self.connector = GameConnector(config)
         self.observer = ObservationCapture()
-        self.semantic = SemanticAnalyzer(config)
+        self.semantic = EnhancedSemanticAnalyzer(config, llm_client)
         self.planner = ColdStartActionPlanner(config)
         self.result = ColdStartResult()
 
         # 输出目录
         self.output_dir = Path(config.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.screenshot_dir = self.output_dir / "screenshots"
+        self.screenshot_dir.mkdir(parents=True, exist_ok=True)
         self.log_path = self.output_dir / "logs" / "exploration.jsonl"
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         if self.log_path.exists():
@@ -339,7 +355,9 @@ class ColdStartExplorer:
             _log_event(self.log_path, {"kind": "error", "error": str(exc)})
 
         finally:
+            self.result.total_steps = self._step_counter
             self.result.finished_at = _utc_iso()
+            self.semantic.shutdown(wait=True)
             self._save_outputs()
 
         return self.result
@@ -387,8 +405,18 @@ class ColdStartExplorer:
                     "msg": "首屏采集失败：无法获取 Poco UI 树数据。" # 【新增】易读描述
                 })
                 return None
+                
+            # 【新增】进行首屏截图
+            screen_path = str(self.screenshot_dir / f"step_{self._step_counter}_init.png")
+            if not self.connector.snapshot(screen_path):
+                _log_event(self.log_path, {
+                    "kind": "screenshot_failed",
+                    "msg": "首屏截图失败，无法进行语义分析",
+                    "step": self._step_counter,
+                })
+                return None
 
-            obs = self.observer.capture(hierarchy)
+            obs = self.observer.capture(hierarchy, screenshot_path=screen_path)
             _log_event(self.log_path, {
                 "kind": "first_screen",
                 "msg": f"首屏采集成功：当前所在页面识别为 '{obs.title}'", # 【新增】易读描述
@@ -558,7 +586,10 @@ class ColdStartExplorer:
                 if execution.page_changed and execution.page_after:
                     after_hierarchy = self.connector.dump_hierarchy()
                     if after_hierarchy:
-                        after_obs = self.observer.capture(after_hierarchy)
+                        after_obs = self.observer.capture(
+                            after_hierarchy,
+                            screenshot_path=execution.after_screenshot_path,
+                        )
                         self._explore_from(
                             after_obs,
                             depth=depth + 1,
@@ -593,6 +624,7 @@ class ColdStartExplorer:
     ) -> ActionExecution | None:
         """执行一个候选动作并返回执行记录。"""
         self._step_counter += 1
+        self.result.total_steps = self._step_counter
 
         _log_event(self.log_path, {
             "kind": "action_start",
@@ -625,6 +657,7 @@ class ColdStartExplorer:
                 action=action,
                 page_before=current_sig,
                 page_after=None,
+                after_screenshot_path="",
                 success=False,
                 page_changed=False,
                 click_info=click_info,
@@ -650,6 +683,7 @@ class ColdStartExplorer:
                 action=action,
                 page_before=current_sig,
                 page_after=None,
+                after_screenshot_path="",
                 success=False,
                 page_changed=False,
                 click_info=click_info,
@@ -678,7 +712,11 @@ class ColdStartExplorer:
         if after_hierarchy is None:
             return None
 
-        after_obs = self.observer.capture(after_hierarchy)
+        # 【新增】动作执行后采集截图
+        screen_path = str(self.screenshot_dir / f"step_{self._step_counter}_after.png")
+        self.connector.snapshot(screen_path)
+
+        after_obs = self.observer.capture(after_hierarchy, screenshot_path=screen_path) # 【修改】传入截图
         page_changed = after_obs.signature != current_sig
 
         _log_event(self.log_path, {
@@ -697,6 +735,7 @@ class ColdStartExplorer:
             action=action,
             page_before=current_sig,
             page_after=after_obs.signature,
+            after_screenshot_path=screen_path,
             success=True,
             page_changed=page_changed,
             click_info=click_info,
@@ -754,7 +793,10 @@ class ColdStartExplorer:
             # 最后检查一次
             hierarchy = self.connector.dump_hierarchy()
             if hierarchy:
-                obs = self.observer.capture(hierarchy)
+                # 【新增】回退后的截图
+                screen_path = str(self.screenshot_dir / f"step_{self._step_counter}_back.png")
+                self.connector.snapshot(screen_path)
+                obs = self.observer.capture(hierarchy, screenshot_path=screen_path) # 【修改】
                 return obs.signature == expected_sig
             return False
 
