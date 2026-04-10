@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 
 from .config import GameConfig
 from .observation import ObservedNode, PageObservation
@@ -74,6 +73,11 @@ class PageSemanticInfo:
     has_popup: bool = False
     has_high_risk: bool = False
     node_semantics: list[NodeSemanticInfo] = field(default_factory=list)
+    semantic_source: str = "rule"
+    cache_hit: bool = False
+    llm_candidate_count: int = 0
+    llm_enriched_node_count: int = 0
+    llm_pending: bool = False
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@
 
 from .action_planner import CandidateAction, ColdStartActionPlanner
 from .config import (
+    ENGINE_ANDROID_UIAUTOMATION,
     ENGINE_COCOS2DX_JS,
     ENGINE_COCOS2DX_LUA,
     ENGINE_COCOS_CREATOR,
@@ -35,6 +36,7 @@ from .state_graph import ExplorationGraph, PageNode, TransitionEdge
 __all__ = [
     # config
     "GameConfig",
+    "ENGINE_ANDROID_UIAUTOMATION",
     "ENGINE_UNITY3D",
     "ENGINE_COCOS_CREATOR",
     "ENGINE_COCOS2DX_JS",

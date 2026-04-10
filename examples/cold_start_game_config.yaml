@@ -1,35 +1,31 @@
 # ============================================================
-# 冷启动探索 - 游戏配置
-#
-# 只需修改本文件即可切换不同游戏、不同引擎、不同设备。
-# 支持引擎类型: unity3d / cocos_creator / cocos2dx_js / cocos2dx_lua
+# 冷启动探索 - 星途天城(Android fallback) 默认配置
 # ============================================================
 
 # ---- 游戏标识 ----
-project_name: demo_unity_game
-engine_type: unity3d
-package_name: com.NetEase
-activity_name: com.NetEase/com.unity3d.player.UnityPlayerActivity
+project_name: 星途天城(poco)
+engine_type: android_uiautomation
+package_name: com.xttc.release.poco
+activity_name: com.xttc.release.poco/org.cocos2dx.javascript.AppActivity
 
 # ---- 设备配置 ----
 device:
-  uri: "Android:///emulator-5554"
-  serial: emulator-5554
+  uri: "Android:///127.0.0.1:16384"
+  serial: 127.0.0.1:16384
 
 # ---- Poco 连接配置 ----
-# port 设为 0 表示使用引擎默认端口（unity3d=5001, cocos=5003, lua=15004）
 connection:
-  host: localhost
+  host: 127.0.0.1
   port: 0
 
 # ---- 探索参数 ----
 exploration:
-  max_steps: 200           # 最大探索步数
-  max_pages: 30            # 最大页面数
-  max_actions_per_page: 8  # 每页最多尝试的动作数
-  boot_wait_s: 8.0         # 启动等待秒数
-  action_wait_s: 2.0       # 每次动作后等待秒数
-  no_new_page_limit: 10    # 连续无新页面步数，达到则停止
+  max_steps: 200
+  max_pages: 30
+  max_actions_per_page: 20
+  boot_wait_s: 10.0
+  action_wait_s: 2.0
+  no_new_page_limit: 10
 
 # ---- 安全配置 ----
 safety:
@@ -38,6 +34,7 @@ safety:
     - 支付
     - 购买
     - 删除
+    - 删除账号
     - 退出登录
     - recharge
     - pay
@@ -46,12 +43,19 @@ safety:
   safe_priority_keywords:
     - 关闭
     - 确认
+    - 确定
     - 下一步
     - 开始
     - 进入
     - 领取
     - 跳过
     - 返回
+    - 大厅
+    - 冒险
+    - 出战
+    - 挑战
+    - 自动
+    - 结算
     - close
     - confirm
     - next
@@ -61,6 +65,147 @@ safety:
     - skip
     - back
     - ok
+
+# ---- 页面签名提示 ----
+page_type_hints:
+  login:
+    - 开始游戏
+    - 游客登录
+    - 账号登录
+    - 登录
+    - login
+    - 账号
+    - account
+  lobby:
+    - 大厅
+    - lobby
+    - 主页
+    - home
+    - 主界面
+    - 冒险
+    - 背包
+    - 任务
+    - 邮件
+  role_select:
+    - 选角
+    - 角色选择
+    - 角色
+    - role
+    - 职业
+  dialog:
+    - 弹窗
+    - dialog
+    - 提示
+    - notice
+    - 公告
+    - 更新公告
+    - 用户协议
+    - 实名认证
+    - 签到弹窗
+  guide:
+    - 引导
+    - guide
+    - 新手
+    - tutorial
+    - 教程
+    - 下一步
+  reward:
+    - 奖励
+    - reward
+    - 领取
+    - claim
+    - 签到
+  battle_prepare:
+    - 编队
+    - 准备
+    - 出战
+    - 选择
+    - prepare
+    - 挑战
+  battle_running:
+    - 战斗
+    - battle
+    - fighting
+    - combat
+    - 自动
+    - 暂停
+    - 跳过
+  battle_result:
+    - 结算
+    - result
+    - 胜利
+    - 失败
+    - victory
+    - defeat
+    - 再次挑战
+  shop:
+    - 商店
+    - shop
+    - 商城
+    - mall
+    - store
+    - 充值
+    - recharge
+
+# ---- 控件语义提示 ----
+control_role_hints:
+  close:
+    - close
+    - 关闭
+    - x
+    - btn_close
+    - CloseBtn
+  back:
+    - back
+    - 返回
+    - btn_back
+    - BackBtn
+  confirm:
+    - confirm
+    - 确认
+    - 确定
+    - ok
+    - btn_confirm
+    - ConfirmBtn
+  skip:
+    - skip
+    - 跳过
+    - btn_skip
+    - SkipBtn
+  reward_claim:
+    - 领取
+    - claim
+    - receive
+    - collect
+  primary_entry:
+    - 开始
+    - 开始游戏
+    - 进入
+    - 游客登录
+    - 账号登录
+    - start
+    - enter
+    - play
+    - go
+  battle_start:
+    - 战斗
+    - 出战
+    - 挑战
+    - battle
+    - fight
+    - challenge
+  battle_auto:
+    - 自动
+    - auto
+  dangerous_action:
+    - 充值
+    - 支付
+    - 购买
+    - 删除
+    - recharge
+    - pay
+    - purchase
+    - delete
 
 # ---- 输出目录 ----
 output_dir: outputs/cold_start

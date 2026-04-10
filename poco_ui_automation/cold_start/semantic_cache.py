@@ -1,6 +1,6 @@
 """基于页面签名的本地语义缓存层。"""
 import json
-import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -40,11 +40,21 @@ class SemanticCache:
                 "role_reason": n_info.role_reason
             })
 
+        llm_enriched_node_count = sum(
+            1
+            for n_info in semantic_info.node_semantics
+            if "LLM_SoM_Inferred" in n_info.role_reason
+        )
+
         self._cache_data[page_signature] = {
+            "cache_version": 1,
+            "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "category": semantic_info.category.value,
             "category_reason": semantic_info.category_reason,
             "has_popup": semantic_info.has_popup,
             "has_high_risk": semantic_info.has_high_risk,
+            "semantic_source": getattr(semantic_info, "semantic_source", "rule"),
+            "llm_enriched_node_count": llm_enriched_node_count,
             "node_semantics": serialized_nodes
         }
         self._save_cache()

@@ -118,6 +118,7 @@ class ColdStartReportBuilder:
 
         # 7. 建议初始目标
         suggestions = self._generate_suggestions(graph, result)
+        semantic_stats = dict(result.semantic_stats)
 
         return {
             "overview": {
@@ -141,6 +142,7 @@ class ColdStartReportBuilder:
             "high_risk_pages": risk_pages,
             "high_risk_actions": risk_actions[:10],
             "crashes": result.crashes,
+            "semantic_stats": semantic_stats,
             "suggestions": suggestions,
         }
 
@@ -154,6 +156,10 @@ class ColdStartReportBuilder:
 
         if graph.page_count < 3:
             suggestions.append("发现页面过少，建议增大 max_steps 或调整 action_wait_s")
+
+        if result.stop_reason == "ui_tree_not_exposed_android_uiautomation":
+            suggestions.append("当前构建仅暴露了 Android 原生外壳层级，游戏内画布控件未进入 UI 树")
+            suggestions.append("建议使用接入 Unity/Cocos Poco SDK 的测试包，或补充基于截图/OCR 的点击兜底")
 
         if result.crashes:
             suggestions.append(f"探索中发生 {len(result.crashes)} 次崩溃，建议检查游戏稳定性")
@@ -207,6 +213,23 @@ class ColdStartReportBuilder:
         lines.append("## 控件语义统计\n")
         for role, count in data["control_role_stats"].items():
             lines.append(f"- **{role}**: {count} 次")
+        lines.append("")
+
+        lines.append("## 语义缓存与 LLM 收益\n")
+        semantic_stats = data.get("semantic_stats", {})
+        if semantic_stats:
+            lines.append(f"- 页面分析次数: {semantic_stats.get('pages_analyzed', 0)}")
+            lines.append(f"- 缓存命中页面: {semantic_stats.get('cache_hit_pages', 0)}")
+            lines.append(f"- 缓存未命中页面: {semantic_stats.get('cache_miss_pages', 0)}")
+            lines.append(f"- 缓存命中率: {semantic_stats.get('cache_hit_rate', 0.0):.2%}")
+            lines.append(f"- LLM 提交页面: {semantic_stats.get('llm_submitted_pages', 0)}")
+            lines.append(f"- LLM 完成页面: {semantic_stats.get('llm_completed_pages', 0)}")
+            lines.append(f"- LLM 候选节点: {semantic_stats.get('llm_candidate_nodes', 0)}")
+            lines.append(f"- LLM 增强节点: {semantic_stats.get('llm_enriched_nodes', 0)}")
+            lines.append(f"- 缓存节省的 LLM 调用: {semantic_stats.get('llm_calls_saved_by_cache', 0)}")
+            lines.append(f"- 平均 LLM 延迟: {semantic_stats.get('avg_llm_latency_ms', 0.0)} ms")
+        else:
+            lines.append("- 暂无语义缓存 / LLM 统计")
         lines.append("")
 
         lines.append("## 高价值转移路径\n")

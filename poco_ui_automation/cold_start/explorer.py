@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,7 @@ from typing import Any
 
 from .action_planner import CandidateAction, ColdStartActionPlanner
 from .config import (
+    ENGINE_ANDROID_UIAUTOMATION,
     ENGINE_COCOS2DX_JS,
     ENGINE_COCOS2DX_LUA,
     ENGINE_COCOS_CREATOR,
@@ -42,6 +44,9 @@ def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+_LOG_LOCK = threading.Lock()
+
+
 def _log_event(log_path: Path, payload: dict[str, Any]) -> None:
     time_str = _utc_iso()
     
@@ -57,8 +62,9 @@ def _log_event(log_path: Path, payload: dict[str, Any]) -> None:
     print(f"[{time_str}] [{kind}] {msg}{extra_str}")
 
     # 2. 依然保留原始的 JSONL 文件写入逻辑（为了兼容数据分析）
-    with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"time": time_str, **payload}, ensure_ascii=False) + "\n")
+    with _LOG_LOCK:
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"time": time_str, **payload}, ensure_ascii=False) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +80,7 @@ class GameConnector:
     def __init__(self, config: GameConfig) -> None:
         self.config = config
         self.poco: Any = None
+        self.device: Any = None
         self._adb_path: str | None = None
 
     # ---- 初始化 ----
@@ -81,14 +88,14 @@ class GameConnector:
     def connect(self) -> None:
         """连接设备并初始化 Poco。"""
         from airtest.core.api import connect_device
-        connect_device(self.config.device_uri)
+        self.device = connect_device(self.config.device_uri)
 
         self.poco = self._create_poco()
 
     def reconnect(self) -> None:
         """重新连接 Poco（用于 RPC 断开后恢复）。"""
         from airtest.core.api import connect_device
-        connect_device(self.config.device_uri)
+        self.device = connect_device(self.config.device_uri)
         self.poco = self._create_poco()
 
     def _create_poco(self) -> Any:
@@ -99,15 +106,19 @@ class GameConnector:
 
         if engine == ENGINE_UNITY3D:
             from poco.drivers.unity3d import UnityPoco
-            return UnityPoco((host, port))
+            return UnityPoco(addr=(host, port), device=self.device)
 
         if engine in {ENGINE_COCOS_CREATOR, ENGINE_COCOS2DX_JS}:
             from poco.drivers.cocosjs import CocosJsPoco
-            return CocosJsPoco(addr=(host, port))
+            return CocosJsPoco(addr=(host, port), device=self.device)
 
         if engine == ENGINE_COCOS2DX_LUA:
             from poco.drivers.std import StdPoco
-            return StdPoco(port=port, use_airtest_input=True)
+            return StdPoco(port=port, device=self.device, use_airtest_input=True)
+
+        if engine == ENGINE_ANDROID_UIAUTOMATION:
+            from poco.drivers.android.uiautomation import AndroidUiautomationPoco
+            return AndroidUiautomationPoco(use_airtest_input=True, screenshot_each_action=False)
 
         # 兜底：Android 原生 UI
         from poco.drivers.android.uiautomation import AndroidUiautomationPoco
@@ -222,6 +233,12 @@ class ActionExecution:
         page_changed: bool,
         click_info: str,
         duration_ms: int,
+        page_title_before: str = "",
+        page_visit_index: int = 1,
+        semantic_source_before_action: str = "rule",
+        cache_hit_before_action: bool = False,
+        llm_pending_for_page: bool = False,
+        action_role_reason: str = "",
     ) -> None:
         self.step = step
         self.action = action
@@ -232,6 +249,12 @@ class ActionExecution:
         self.page_changed = page_changed
         self.click_info = click_info
         self.duration_ms = duration_ms
+        self.page_title_before = page_title_before
+        self.page_visit_index = page_visit_index
+        self.semantic_source_before_action = semantic_source_before_action
+        self.cache_hit_before_action = cache_hit_before_action
+        self.llm_pending_for_page = llm_pending_for_page
+        self.action_role_reason = action_role_reason
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -239,12 +262,18 @@ class ActionExecution:
             "action_key": self.action.action_key,
             "action_label": self.action.label,
             "action_role": self.action.role.value,
+            "action_role_reason": self.action_role_reason,
             "page_before": self.page_before,
+            "page_title_before": self.page_title_before,
+            "page_visit_index": self.page_visit_index,
             "page_after": self.page_after,
             "success": self.success,
             "page_changed": self.page_changed,
             "click_info": self.click_info,
             "duration_ms": self.duration_ms,
+            "semantic_source_before_action": self.semantic_source_before_action,
+            "cache_hit_before_action": self.cache_hit_before_action,
+            "llm_pending_for_page": self.llm_pending_for_page,
         }
 
 
@@ -264,6 +293,7 @@ class ColdStartResult:
         self.crashes: list[dict[str, Any]] = []
         self.graph: ExplorationGraph = ExplorationGraph()
         self.page_semantics: dict[str, dict[str, Any]] = {}  # sig -> semantic summary
+        self.semantic_stats: dict[str, Any] = {}
         self.started_at: str = _utc_iso()
         self.finished_at: str = ""
 
@@ -279,6 +309,7 @@ class ColdStartResult:
             "edge_count": self.graph.edge_count,
             "crashes": self.crashes,
             "page_semantics": self.page_semantics,
+            "semantic_stats": self.semantic_stats,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
         }
@@ -304,7 +335,7 @@ class ColdStartExplorer:
         self.config = config
         self.connector = GameConnector(config)
         self.observer = ObservationCapture()
-        self.semantic = EnhancedSemanticAnalyzer(config, llm_client)
+        self.semantic = EnhancedSemanticAnalyzer(config, llm_client, event_callback=self._log_semantic_event)
         self.planner = ColdStartActionPlanner(config)
         self.result = ColdStartResult()
 
@@ -323,6 +354,7 @@ class ColdStartExplorer:
         self._step_counter: int = 0
         self._consecutive_no_new: int = 0
         self._explored_pages: set[str] = set()
+        self._page_visit_counts: dict[str, int] = {}
 
     # ================================================================
     # 主入口
@@ -345,9 +377,10 @@ class ColdStartExplorer:
             self._explore_from(first_obs, depth=0, path_stack=[])
 
             # 步骤 6：结果验收
-            self.result.status = "completed"
-            if not self.result.stop_reason:
-                self.result.stop_reason = "exploration_completed"
+            if self.result.status == "running":
+                self.result.status = "completed"
+                if not self.result.stop_reason:
+                    self.result.stop_reason = "exploration_completed"
 
         except Exception as exc:
             self.result.status = "error"
@@ -358,6 +391,7 @@ class ColdStartExplorer:
             self.result.total_steps = self._step_counter
             self.result.finished_at = _utc_iso()
             self.semantic.shutdown(wait=True)
+            self.result.semantic_stats = self.semantic.get_stats()
             self._save_outputs()
 
         return self.result
@@ -426,6 +460,18 @@ class ColdStartExplorer:
                 "clickable_nodes": len(obs.clickable_nodes),
                 "text_nodes": len(obs.text_nodes),
             })
+
+            if self._looks_like_android_shell_only(obs):
+                obs.metadata["ui_tree_not_exposed"] = True
+                _log_event(self.log_path, {
+                    "kind": "ui_tree_not_exposed",
+                    "msg": "检测到当前仅能看到 Android 原生外壳节点，游戏画布内控件未暴露给 UIAutomator。",
+                    "engine": self.config.engine_type,
+                    "signature": obs.signature,
+                    "total_nodes": len(obs.all_nodes),
+                    "sample_node_names": [n.name for n in obs.all_nodes[:8]],
+                    "suggestion": "请改用接入游戏引擎 Poco SDK 的构建，或补充基于截图/OCR 的兜底点击方案。",
+                })
             return obs
 
     # ================================================================
@@ -451,6 +497,12 @@ class ColdStartExplorer:
 
             # ---- 语义分析 ----
             page_sem = self.semantic.analyze(observation)
+            visit_count = self._page_visit_counts.get(sig, 0) + 1
+            self._page_visit_counts[sig] = visit_count
+            node_semantic_map = {
+                sem.node.action_key: sem
+                for sem in page_sem.node_semantics
+            }
 
             # ---- 记录到状态图 ----
             page_node, is_new = self.result.graph.add_page(
@@ -479,6 +531,12 @@ class ColdStartExplorer:
                 "has_high_risk": page_sem.has_high_risk,
                 "clickable_count": len(observation.clickable_nodes),
                 "text_count": len(observation.text_nodes),
+                "visit_count": visit_count,
+                "semantic_source": page_sem.semantic_source,
+                "cache_hit": page_sem.cache_hit,
+                "llm_candidate_count": page_sem.llm_candidate_count,
+                "llm_enriched_node_count": page_sem.llm_enriched_node_count,
+                "llm_pending": page_sem.llm_pending,
             }
 
             _log_event(self.log_path, {
@@ -493,6 +551,12 @@ class ColdStartExplorer:
                 "depth": depth,
                 "has_popup": page_sem.has_popup,
                 "has_high_risk": page_sem.has_high_risk,
+                "visit_count": visit_count,
+                "semantic_source": page_sem.semantic_source,
+                "cache_hit": page_sem.cache_hit,
+                "llm_candidate_count": page_sem.llm_candidate_count,
+                "llm_enriched_node_count": page_sem.llm_enriched_node_count,
+                "llm_pending": page_sem.llm_pending,
             })
 
             # 【修改点 1：移除原本的“页面一波流”粗暴截断机制】
@@ -509,6 +573,8 @@ class ColdStartExplorer:
                 "signature": sig,
                 "candidate_count": len(candidates),
                 "candidates": [c.to_dict() for c in candidates[:5]],  # 前 5 个
+                "semantic_source": page_sem.semantic_source,
+                "cache_hit": page_sem.cache_hit,
             })
 
             # 【修改点 2：新增基于动作集的精细化退出判定】
@@ -517,6 +583,16 @@ class ColdStartExplorer:
 
             # 如果没有安全动作，或者所有的安全动作都已经探索过了，才判定这个页面不需要继续驻留
             if not safe_candidates:
+                if observation.metadata.get("ui_tree_not_exposed"):
+                    self.result.status = "blocked"
+                    self.result.stop_reason = "ui_tree_not_exposed_android_uiautomation"
+                    _log_event(self.log_path, {
+                        "kind": "stop",
+                        "msg": "当前页面没有任何可操作节点，且检测到仅存在 Android 外壳层级，终止探索。",
+                        "reason": self.result.stop_reason,
+                        "signature": sig,
+                        "engine": self.config.engine_type,
+                    })
                 return
 
             all_explored = all(self.planner.is_explored(sig, c.action_key) for c in safe_candidates)
@@ -548,7 +624,17 @@ class ColdStartExplorer:
                 if self.planner.is_explored(sig, action.action_key):
                     continue
 
-                execution = self._execute_action(action, sig)
+                action_sem = node_semantic_map.get(action.action_key)
+                execution = self._execute_action(
+                    action,
+                    sig,
+                    observation.title,
+                    visit_count,
+                    page_sem.semantic_source,
+                    page_sem.cache_hit,
+                    page_sem.llm_pending,
+                    action_sem.role_reason if action_sem else "",
+                )
                 if execution is None:
                     continue
 
@@ -621,6 +707,12 @@ class ColdStartExplorer:
         self,
         action: CandidateAction,
         current_sig: str,
+        current_title: str,
+        page_visit_index: int,
+        semantic_source: str,
+        cache_hit: bool,
+        llm_pending: bool,
+        action_role_reason: str,
     ) -> ActionExecution | None:
         """执行一个候选动作并返回执行记录。"""
         self._step_counter += 1
@@ -634,6 +726,11 @@ class ColdStartExplorer:
             "action_key": action.action_key,
             "action_label": action.label,
             "action_role": action.role.value,
+            "page_title": current_title,
+            "page_visit_index": page_visit_index,
+            "semantic_source": semantic_source,
+            "cache_hit": cache_hit,
+            "llm_pending": llm_pending,
         })
 
         start_time = time.perf_counter()
@@ -662,6 +759,12 @@ class ColdStartExplorer:
                 page_changed=False,
                 click_info=click_info,
                 duration_ms=duration_ms,
+                page_title_before=current_title,
+                page_visit_index=page_visit_index,
+                semantic_source_before_action=semantic_source,
+                cache_hit_before_action=cache_hit,
+                llm_pending_for_page=llm_pending,
+                action_role_reason=action_role_reason,
             )
 
         time.sleep(self.config.action_wait_s)
@@ -688,6 +791,12 @@ class ColdStartExplorer:
                 page_changed=False,
                 click_info=click_info,
                 duration_ms=duration_ms,
+                page_title_before=current_title,
+                page_visit_index=page_visit_index,
+                semantic_source_before_action=semantic_source,
+                cache_hit_before_action=cache_hit,
+                llm_pending_for_page=llm_pending,
+                action_role_reason=action_role_reason,
             )
 
         # 采集动作后的页面
@@ -740,7 +849,16 @@ class ColdStartExplorer:
             page_changed=page_changed,
             click_info=click_info,
             duration_ms=duration_ms,
+            page_title_before=current_title,
+            page_visit_index=page_visit_index,
+            semantic_source_before_action=semantic_source,
+            cache_hit_before_action=cache_hit,
+            llm_pending_for_page=llm_pending,
+            action_role_reason=action_role_reason,
         )
+
+    def _log_semantic_event(self, payload: dict[str, Any]) -> None:
+        _log_event(self.log_path, payload)
 
     # ================================================================
     # 返回控制
@@ -829,6 +947,30 @@ class ColdStartExplorer:
             return True
 
         return False
+
+    def _looks_like_android_shell_only(self, observation: PageObservation) -> bool:
+        """判断当前 UI 树是否只暴露了 Android 原生容器壳。"""
+        if self.config.engine_type != ENGINE_ANDROID_UIAUTOMATION:
+            return False
+        if observation.clickable_nodes or observation.text_nodes:
+            return False
+        if len(observation.all_nodes) > 12:
+            return False
+
+        wrapper_like_count = 0
+        for node in observation.all_nodes:
+            name = (node.name or "").lower()
+            if (
+                not name
+                or name == "<root>"
+                or name.startswith("android.")
+                or name.startswith("android:")
+                or "layout" in name
+                or "android:id/content" in name
+            ):
+                wrapper_like_count += 1
+
+        return wrapper_like_count >= max(1, len(observation.all_nodes) - 1)
 
     # ================================================================
     # 输出保存

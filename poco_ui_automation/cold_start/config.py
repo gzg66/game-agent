@@ -19,6 +19,7 @@ ENGINE_UNITY3D = "unity3d"
 ENGINE_COCOS_CREATOR = "cocos_creator"
 ENGINE_COCOS2DX_JS = "cocos2dx_js"
 ENGINE_COCOS2DX_LUA = "cocos2dx_lua"
+ENGINE_ANDROID_UIAUTOMATION = "android_uiautomation"
 
 # 引擎 -> 默认 Poco 端口映射
 _DEFAULT_PORTS: dict[str, int] = {
@@ -26,6 +27,7 @@ _DEFAULT_PORTS: dict[str, int] = {
     ENGINE_COCOS_CREATOR: 5003,
     ENGINE_COCOS2DX_JS: 5003,
     ENGINE_COCOS2DX_LUA: 15004,
+    ENGINE_ANDROID_UIAUTOMATION: 0,
 }
 
 
@@ -37,47 +39,49 @@ class GameConfig:
     """
 
     # ---- 游戏标识 ----
-    project_name: str = "demo_game"
-    engine_type: str = ENGINE_UNITY3D
-    package_name: str = "com.NetEase"
-    activity_name: str = "com.NetEase/com.unity3d.player.UnityPlayerActivity"
+    project_name: str = "星途天城(poco)"
+    engine_type: str = ENGINE_ANDROID_UIAUTOMATION
+    package_name: str = "com.xttc.release.poco"
+    activity_name: str = "com.xttc.release.poco/org.cocos2dx.javascript.AppActivity"
 
     # ---- 设备 ----
-    device_uri: str = "Android:///emulator-5554"
-    device_serial: str = "emulator-5554"
+    device_uri: str = "Android:///127.0.0.1:16384"
+    device_serial: str = "127.0.0.1:16384"
 
     # ---- Poco 连接 ----
-    poco_host: str = "localhost"
-    poco_port: int = 0  # 0 表示自动按引擎类型取默认端口
+    poco_host: str = "127.0.0.1"
+    poco_port: int = 0
 
     # ---- 探索参数 ----
     max_steps: int = 200  # 最大探索步数
     max_pages: int = 30  # 最大页面数
-    max_actions_per_page: int = 20# 每页最多尝试的动作数
-    boot_wait_s: float = 8.0  # 启动等待秒数
+    max_actions_per_page: int = 20  # 每页最多尝试的动作数
+    boot_wait_s: float = 10.0  # 启动等待秒数
     action_wait_s: float = 2.0  # 每次动作后等待秒数
     no_new_page_limit: int = 10  # 连续无新页面步数，达到则停止
 
     # ---- 安全配置 ----
     dangerous_keywords: list[str] = field(default_factory=lambda: [
-        "充值", "支付", "购买", "删除", "退出登录",
+        "充值", "支付", "购买", "删除", "删除账号", "退出登录",
         "recharge", "pay", "purchase", "delete",
     ])
     safe_priority_keywords: list[str] = field(default_factory=lambda: [
-        "关闭", "确认", "下一步", "开始", "进入", "领取", "跳过", "返回",
+        "关闭", "确认", "确定", "下一步", "开始", "进入", "领取", "跳过", "返回",
+        "大厅", "冒险", "出战", "挑战", "自动", "结算",
         "close", "confirm", "next", "start", "enter", "claim", "skip", "back", "ok",
     ])
 
     # ---- 页面签名关键字（用于页面类型识别） ----
     page_type_hints: dict[str, list[str]] = field(default_factory=lambda: {
-        "login": ["登录", "login", "账号", "account", "密码", "password"],
-        "lobby": ["大厅", "lobby", "主页", "home", "主界面"],
-        "dialog": ["弹窗", "dialog", "提示", "notice", "公告"],
-        "guide": ["引导", "guide", "新手", "tutorial", "教程"],
+        "login": ["开始游戏", "游客登录", "账号登录", "登录", "login", "账号", "account"],
+        "lobby": ["大厅", "lobby", "主页", "home", "主界面", "冒险", "背包", "任务", "邮件"],
+        "role_select": ["选角", "角色选择", "角色", "role", "职业"],
+        "dialog": ["弹窗", "dialog", "提示", "notice", "公告", "更新公告", "用户协议", "实名认证", "签到弹窗"],
+        "guide": ["引导", "guide", "新手", "tutorial", "教程", "下一步"],
         "reward": ["奖励", "reward", "领取", "claim", "签到"],
-        "battle_prepare": ["编队", "准备", "出战", "选择", "prepare"],
-        "battle_running": ["战斗", "battle", "fighting", "combat"],
-        "battle_result": ["结算", "result", "胜利", "失败", "victory", "defeat"],
+        "battle_prepare": ["编队", "准备", "出战", "选择", "prepare", "挑战"],
+        "battle_running": ["战斗", "battle", "fighting", "combat", "自动", "暂停", "跳过"],
+        "battle_result": ["结算", "result", "胜利", "失败", "victory", "defeat", "再次挑战"],
         "shop": ["商店", "shop", "商城", "mall", "store", "充值", "recharge"],
     })
 
@@ -88,8 +92,9 @@ class GameConfig:
         "confirm": ["confirm", "确认", "确定", "ok", "btn_confirm", "ConfirmBtn"],
         "skip": ["skip", "跳过", "btn_skip", "SkipBtn"],
         "reward_claim": ["领取", "claim", "receive", "collect"],
-        "primary_entry": ["开始", "进入", "start", "enter", "play", "go"],
+        "primary_entry": ["开始", "开始游戏", "进入", "游客登录", "账号登录", "start", "enter", "play", "go"],
         "battle_start": ["战斗", "出战", "挑战", "battle", "fight", "challenge"],
+        "battle_auto": ["自动", "auto"],
         "dangerous_action": ["充值", "支付", "购买", "删除", "recharge", "pay", "purchase", "delete"],
     })
 
