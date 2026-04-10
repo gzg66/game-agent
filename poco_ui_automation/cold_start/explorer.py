@@ -89,6 +89,7 @@ class GameConnector:
         """连接设备并初始化 Poco。"""
         from airtest.core.api import connect_device
         self.device = connect_device(self.config.device_uri)
+        self.ensure_poco_forward()
 
         self.poco = self._create_poco()
 
@@ -96,6 +97,7 @@ class GameConnector:
         """重新连接 Poco（用于 RPC 断开后恢复）。"""
         from airtest.core.api import connect_device
         self.device = connect_device(self.config.device_uri)
+        self.ensure_poco_forward()
         self.poco = self._create_poco()
 
     def _create_poco(self) -> Any:
@@ -144,11 +146,94 @@ class GameConnector:
             encoding="utf-8", errors="ignore",
         )
 
+    def adb_output(self, *args: str) -> str:
+        result = self.adb_cmd(*args)
+        return (result.stdout or result.stderr or "").strip()
+
     def force_stop_app(self) -> None:
         self.adb_cmd("shell", "am", "force-stop", self.config.package_name)
 
+    def ensure_poco_forward(self) -> None:
+        port = self.config.effective_poco_port()
+        if port <= 0 or self.config.engine_type == ENGINE_ANDROID_UIAUTOMATION:
+            return
+        self.adb_cmd("forward", f"tcp:{port}", f"tcp:{port}")
+
+    def resolve_launch_activity(self) -> str:
+        output = self.adb_output(
+            "shell",
+            "cmd",
+            "package",
+            "resolve-activity",
+            "--brief",
+            self.config.package_name,
+        )
+        for line in reversed(output.splitlines()):
+            candidate = line.strip()
+            if "/" in candidate and self.config.package_name in candidate:
+                return candidate
+        return ""
+
+    def current_focus(self) -> str:
+        focus_dump = self.adb_output("shell", "dumpsys", "window")
+        focus_lines = [
+            line.strip()
+            for line in focus_dump.splitlines()
+            if "mCurrentFocus" in line or "mFocusedApp" in line
+        ]
+        return " | ".join(focus_lines)
+
+    def _wait_for_app_ready(self, timeout_s: float = 8.0) -> bool:
+        deadline = time.time() + max(timeout_s, 1.0)
+        while time.time() < deadline:
+            if self.app_is_running():
+                focus = self.current_focus()
+                if self.config.package_name in focus or not focus:
+                    return True
+            time.sleep(0.5)
+        return False
+
     def start_app(self) -> None:
-        self.adb_cmd("shell", "am", "start", "-n", self.config.activity_name)
+        launch_candidates: list[str] = []
+        if self.config.activity_name:
+            launch_candidates.append(self.config.activity_name)
+
+        resolved_activity = self.resolve_launch_activity()
+        if resolved_activity and resolved_activity not in launch_candidates:
+            launch_candidates.append(resolved_activity)
+
+        errors: list[str] = []
+        for activity_name in launch_candidates:
+            result = self.adb_cmd("shell", "am", "start", "-n", activity_name)
+            if self._wait_for_app_ready():
+                self.config.activity_name = activity_name
+                return
+            errors.append(
+                f"am start -n {activity_name}: "
+                f"{(result.stderr or result.stdout or 'unknown_error').strip()}"
+            )
+
+        monkey_result = self.adb_cmd(
+            "shell",
+            "monkey",
+            "-p",
+            self.config.package_name,
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "1",
+        )
+        if self._wait_for_app_ready():
+            if resolved_activity:
+                self.config.activity_name = resolved_activity
+            return
+
+        focus = self.current_focus() or "<unknown>"
+        error_text = (monkey_result.stderr or monkey_result.stdout or "unknown_error").strip()
+        joined_errors = "; ".join(errors) if errors else "no_explicit_activity"
+        raise RuntimeError(
+            "游戏启动失败: "
+            f"{joined_errors}; monkey: {error_text}; current_focus: {focus}"
+        )
 
     def press_back(self) -> None:
         self.adb_cmd("shell", "input", "keyevent", "4")
@@ -460,6 +545,7 @@ class ColdStartExplorer:
                 "clickable_nodes": len(obs.clickable_nodes),
                 "text_nodes": len(obs.text_nodes),
             })
+            self._dump_first_screen_nodes(obs)
 
             if self._looks_like_android_shell_only(obs):
                 obs.metadata["ui_tree_not_exposed"] = True
@@ -473,6 +559,43 @@ class ColdStartExplorer:
                     "suggestion": "请改用接入游戏引擎 Poco SDK 的构建，或补充基于截图/OCR 的兜底点击方案。",
                 })
             return obs
+
+    def _dump_first_screen_nodes(self, observation: PageObservation) -> None:
+            """把首屏所有节点逐条打印到终端与 JSONL 日志，便于排查节点识别问题。"""
+            total = len(observation.all_nodes)
+            print(f"[冷启动] ========== 首屏节点明细，共 {total} 个 ==========")
+
+            for idx, node in enumerate(observation.all_nodes, start=1):
+                node_payload = {
+                    "index": idx,
+                    "name": node.name,
+                    "text": node.text,
+                    "type": node.node_type,
+                    "path": node.path,
+                    "depth": node.depth,
+                    "visible": node.visible,
+                    "clickable": node.clickable,
+                    "interactive": node.interactive,
+                    "pos": node.pos,
+                    "size": node.size,
+                    "components": node.components,
+                }
+                print(
+                    f"[冷启动][节点 {idx:03d}] "
+                    f"name={node.name!r} text={node.text!r} type={node.node_type!r} "
+                    f"clickable={node.clickable} interactive={node.interactive} "
+                    f"visible={node.visible} depth={node.depth} pos={node.pos} "
+                    f"size={node.size} path={node.path!r} components={node.components}"
+                )
+                _log_event(
+                    self.log_path,
+                    {
+                        "kind": "first_screen_node",
+                        "signature": observation.signature,
+                        "title": observation.title,
+                        **node_payload,
+                    },
+                )
 
     # ================================================================
     # 步骤 3/4/5：递归探索

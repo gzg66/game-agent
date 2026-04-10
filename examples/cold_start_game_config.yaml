@@ -4,7 +4,7 @@
 
 # ---- 游戏标识 ----
 project_name: 星途天城(poco)
-engine_type: android_uiautomation
+engine_type: cocos2dx_js
 package_name: com.xttc.release.poco
 activity_name: com.xttc.release.poco/org.cocos2dx.javascript.AppActivity
 
@@ -16,7 +16,7 @@ device:
 # ---- Poco 连接配置 ----
 connection:
   host: 127.0.0.1
-  port: 0
+  port: 5003
 
 # ---- 探索参数 ----
 exploration:

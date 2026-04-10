@@ -40,7 +40,7 @@ class GameConfig:
 
     # ---- 游戏标识 ----
     project_name: str = "星途天城(poco)"
-    engine_type: str = ENGINE_ANDROID_UIAUTOMATION
+    engine_type: str = ENGINE_COCOS2DX_JS
     package_name: str = "com.xttc.release.poco"
     activity_name: str = "com.xttc.release.poco/org.cocos2dx.javascript.AppActivity"
 
@@ -50,7 +50,7 @@ class GameConfig:
 
     # ---- Poco 连接 ----
     poco_host: str = "127.0.0.1"
-    poco_port: int = 0
+    poco_port: int = 5003
 
     # ---- 探索参数 ----
     max_steps: int = 200  # 最大探索步数

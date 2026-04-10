@@ -37,10 +37,16 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from poco_ui_automation.cold_start import (
+from poco_ui_automation.cold_start import (  # noqa: E402
     ColdStartExplorer,
     ColdStartReportBuilder,
     GameConfig,
+)
+from poco_ui_automation.cold_start.config import (  # noqa: E402
+    ENGINE_ANDROID_UIAUTOMATION,
+    ENGINE_COCOS2DX_JS,
+    ENGINE_COCOS2DX_LUA,
+    ENGINE_UNITY3D,
 )
 
 
@@ -139,6 +145,96 @@ def run_adb(device_serial: str, *args: str) -> subprocess.CompletedProcess[str]:
 def adb_output(device_serial: str, *args: str) -> str:
     result = run_adb(device_serial, *args)
     return (result.stdout or result.stderr or "").strip()
+
+
+def device_serial_from_uri(device_uri: str) -> str:
+    if ":///" in device_uri:
+        return device_uri.split(":///", 1)[1]
+    if "://" in device_uri:
+        return device_uri.split("://", 1)[1]
+    return device_uri
+
+
+def resolve_launch_activity(device_serial: str, package_name: str) -> str:
+    output = adb_output(
+        device_serial,
+        "shell",
+        "cmd",
+        "package",
+        "resolve-activity",
+        "--brief",
+        package_name,
+    )
+    for line in reversed(output.splitlines()):
+        candidate = line.strip()
+        if "/" in candidate and package_name in candidate:
+            return candidate
+    return ""
+
+
+def detect_engine_from_runtime(config: GameConfig) -> tuple[str, int, str]:
+    listening_ports = adb_output(config.device_serial, "shell", "ss", "-ltn")
+    poco_service_installed = bool(
+        adb_output(config.device_serial, "shell", "pm", "path", "com.netease.open.pocoservice")
+    )
+
+    if "5003" in listening_ports:
+        return ENGINE_COCOS2DX_JS, 5003, "detected_listen_port_5003"
+    if "5001" in listening_ports:
+        return ENGINE_UNITY3D, 5001, "detected_listen_port_5001"
+    if "15004" in listening_ports:
+        return ENGINE_COCOS2DX_LUA, 15004, "detected_listen_port_15004"
+    if poco_service_installed and config.engine_type == ENGINE_ANDROID_UIAUTOMATION:
+        return ENGINE_COCOS2DX_JS, 5003, "detected_pocoservice_package"
+    return config.engine_type, config.effective_poco_port(), "keep_config"
+
+
+def detect_runtime_config(config: GameConfig) -> None:
+    if not config.device_serial and config.device_uri:
+        config.device_serial = device_serial_from_uri(config.device_uri)
+
+    devices_output = adb_output(config.device_serial, "devices")
+    if config.device_serial not in devices_output or "\tdevice" not in devices_output:
+        raise RuntimeError(
+            f"设备未连接或状态异常: {config.device_serial}。请先确认 adb devices 可见该设备。"
+        )
+
+    package_path = adb_output(config.device_serial, "shell", "pm", "path", config.package_name)
+    if not package_path.startswith("package:"):
+        raise RuntimeError(f"设备上未安装目标游戏包: {config.package_name}")
+
+    resolved_activity = resolve_launch_activity(config.device_serial, config.package_name)
+    if resolved_activity:
+        if config.activity_name != resolved_activity:
+            print(f"[冷启动][检测] 启动 Activity 已修正: {config.activity_name} -> {resolved_activity}")
+        config.activity_name = resolved_activity
+
+    detected_engine, detected_port, detect_reason = detect_engine_from_runtime(config)
+    if detected_engine != config.engine_type:
+        print(f"[冷启动][检测] 引擎类型已修正: {config.engine_type} -> {detected_engine}")
+        config.engine_type = detected_engine
+    if detected_port > 0 and config.poco_port != detected_port:
+        print(f"[冷启动][检测] Poco 端口已修正: {config.poco_port} -> {detected_port}")
+        config.poco_port = detected_port
+
+    pid = adb_output(config.device_serial, "shell", "pidof", config.package_name) or "未运行"
+    focus = adb_output(config.device_serial, "shell", "dumpsys", "window")
+    focus_lines = [
+        line.strip()
+        for line in focus.splitlines()
+        if "mCurrentFocus" in line or "mFocusedApp" in line
+    ]
+    print("[冷启动][检测] 设备与游戏配置探测完成:")
+    print(f"  设备序列号: {config.device_serial}")
+    print(f"  包名: {config.package_name}")
+    print(f"  Activity: {config.activity_name or '<unknown>'}")
+    print(f"  引擎: {config.engine_type}")
+    print(f"  Poco: {config.poco_host}:{config.effective_poco_port()} ({detect_reason})")
+    print(f"  当前 PID: {pid}")
+    if focus_lines:
+        print("  当前前台窗口:")
+        for line in focus_lines:
+            print(f"    {line}")
 
 
 def local_port_open(host: str, port: int, timeout_s: float = 1.0) -> bool:
@@ -269,6 +365,7 @@ def main() -> None:
     if hasattr(args, "output"):
         config.output_dir = args.output
 
+    detect_runtime_config(config)
     config.validate()
 
     # 打印配置摘要
@@ -284,10 +381,10 @@ def main() -> None:
     llm_client = None
     if args.enable_vision:
         api_key = args.llm_api_key or os.environ.get("LLM_API_KEY", "dummy_key")
-        print(f"[冷启动] 👁️ 已启用视觉大模型增强，API_KEY: {api_key[:5]}***")
+        print(f"[冷启动] 已启用视觉大模型增强，API_KEY: {api_key[:5]}***")
         llm_client = VisionLLMClient(api_key=api_key)
     else:
-        print("[冷启动] ℹ️ 未启用视觉大模型，仅使用纯规则快车道进行探索。")
+        print("[冷启动] 未启用视觉大模型，仅使用纯规则快车道进行探索。")
     print()
 
     # 执行冷启动探索
@@ -327,7 +424,7 @@ def main() -> None:
     print()
 
     if result.crashes:
-        print(f"[冷启动] ⚠ 探索过程中发生 {len(result.crashes)} 次崩溃！")
+        print(f"[冷启动] 警告: 探索过程中发生 {len(result.crashes)} 次崩溃！")
 
     if result.status != "completed":
         sys.exit(1)
