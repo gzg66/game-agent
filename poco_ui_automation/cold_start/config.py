@@ -60,6 +60,13 @@ class GameConfig:
     action_wait_s: float = 2.0  # 每次动作后等待秒数
     no_new_page_limit: int = 10  # 连续无新页面步数，达到则停止
 
+    # ---- 视觉主导模式 ----
+    vision_mode: str = "rule_first"
+    vision_max_candidates: int = 16
+    vision_min_confidence: float = 0.55
+    vision_allow_low_confidence: bool = False
+    vision_max_calls_per_page: int = 1
+
     # ---- 安全配置 ----
     dangerous_keywords: list[str] = field(default_factory=lambda: [
         "充值", "支付", "购买", "删除", "删除账号", "退出登录",
@@ -92,7 +99,7 @@ class GameConfig:
         "confirm": ["confirm", "确认", "确定", "ok", "btn_confirm", "ConfirmBtn"],
         "skip": ["skip", "跳过", "btn_skip", "SkipBtn"],
         "reward_claim": ["领取", "claim", "receive", "collect"],
-        "primary_entry": ["开始", "开始游戏", "进入", "游客登录", "账号登录", "start", "enter", "play", "go"],
+        "primary_entry": ["开始", "开始游戏", "进入", "登录", "游客登录", "账号登录", "start", "enter", "play", "go"],
         "battle_start": ["战斗", "出战", "挑战", "battle", "fight", "challenge"],
         "battle_auto": ["自动", "auto"],
         "dangerous_action": ["充值", "支付", "购买", "删除", "recharge", "pay", "purchase", "delete"],
@@ -116,6 +123,14 @@ class GameConfig:
         if self.engine_type not in _DEFAULT_PORTS:
             raise ValueError(f"不支持的引擎类型: {self.engine_type}，"
                              f"可选: {list(_DEFAULT_PORTS.keys())}")
+        if self.vision_mode not in {"rule_first", "vision_first"}:
+            raise ValueError("vision_mode 仅支持 rule_first 或 vision_first")
+        if self.vision_max_candidates <= 0:
+            raise ValueError("vision_max_candidates 必须大于 0")
+        if not 0.0 <= self.vision_min_confidence <= 1.0:
+            raise ValueError("vision_min_confidence 必须位于 0 到 1 之间")
+        if self.vision_max_calls_per_page <= 0:
+            raise ValueError("vision_max_calls_per_page 必须大于 0")
 
     # ---- 加载方法 ----
     @classmethod
@@ -135,6 +150,16 @@ class GameConfig:
                         "boot_wait_s", "action_wait_s", "no_new_page_limit"):
                 if key in data["exploration"]:
                     flat[key] = data["exploration"][key]
+        if "vision" in data and isinstance(data["vision"], dict):
+            for key in (
+                "vision_mode",
+                "vision_max_candidates",
+                "vision_min_confidence",
+                "vision_allow_low_confidence",
+                "vision_max_calls_per_page",
+            ):
+                if key in data["vision"]:
+                    flat[key] = data["vision"][key]
         if "safety" in data and isinstance(data["safety"], dict):
             if "dangerous_keywords" in data["safety"]:
                 flat["dangerous_keywords"] = data["safety"]["dangerous_keywords"]
@@ -147,6 +172,8 @@ class GameConfig:
             "device_uri", "device_serial", "poco_host", "poco_port",
             "max_steps", "max_pages", "max_actions_per_page",
             "boot_wait_s", "action_wait_s", "no_new_page_limit",
+            "vision_mode", "vision_max_candidates", "vision_min_confidence",
+            "vision_allow_low_confidence", "vision_max_calls_per_page",
             "dangerous_keywords", "safe_priority_keywords",
             "page_type_hints", "control_role_hints", "output_dir",
         ):

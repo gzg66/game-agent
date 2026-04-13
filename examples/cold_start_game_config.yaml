@@ -181,6 +181,7 @@ control_role_hints:
     - 开始
     - 开始游戏
     - 进入
+    - 登录
     - 游客登录
     - 账号登录
     - start

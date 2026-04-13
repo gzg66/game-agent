@@ -30,6 +30,8 @@ class CandidateAction:
     reason: str
     risk_level: int = 0
     tier: int = 2  # 【核心修改 1】：新增动作梯队属性，数值越大越优先执行
+    confidence: float = 0.0
+    semantic_source: str = "rule"
 
     @property
     def action_key(self) -> str:
@@ -53,6 +55,8 @@ class CandidateAction:
             "priority": round(self.priority, 2),
             "risk_level": self.risk_level,
             "tier": self.tier,
+            "confidence": round(self.confidence, 3),
+            "semantic_source": self.semantic_source,
             "reason": self.reason,
         }
 
@@ -80,10 +84,19 @@ class ColdStartActionPlanner:
             node = sem.node
 
             # 过滤不可见节点和无效位置
+            if not sem.is_actionable:
+                continue
             if not node.visible or not _is_valid_pos(node):
                 continue
+            if (
+                getattr(self.config, "vision_mode", "rule_first") == "vision_first"
+                and not getattr(self.config, "vision_allow_low_confidence", False)
+                and sem.semantic_source != "rule_degraded"
+                and sem.confidence < getattr(self.config, "vision_min_confidence", 0.55)
+            ):
+                continue
 
-            priority = sem.priority_score
+            priority = sem.priority_score + sem.confidence * 20.0
             reason_parts: list[str] = []
             
             # 【核心修改 2】：默认所有的动作都属于正向探索梯队 (Tier 2)
@@ -91,6 +104,8 @@ class ColdStartActionPlanner:
 
             if sem.role != ControlRole.UNKNOWN:
                 reason_parts.append(f"角色={sem.role.value}")
+            reason_parts.append(f"置信度={sem.confidence:.2f}")
+            reason_parts.append(f"来源={sem.semantic_source}")
 
             # 已探索过的动作降权（同梯队内降低优先级）
             scope_key = f"{page_semantic.observation.signature}::{node.action_key}"
@@ -133,6 +148,8 @@ class ColdStartActionPlanner:
                 reason="; ".join(reason_parts) if reason_parts else "启发式",
                 risk_level=sem.risk_level,
                 tier=tier, # 录入梯队信息
+                confidence=sem.confidence,
+                semantic_source=sem.semantic_source,
             ))
 
         # 【核心修改 4】：使用组合键排序 (Tuple Sorting)

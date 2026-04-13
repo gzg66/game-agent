@@ -4,6 +4,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+
+_CACHE_VERSION = 3
+
 class SemanticCache:
     def __init__(self, cache_dir: str = "outputs/cold_start/semantic_cache"):
         self.cache_dir = Path(cache_dir)
@@ -28,7 +31,12 @@ class SemanticCache:
             print(f"保存语义缓存失败: {e}")
 
     def get(self, page_signature: str) -> Optional[dict[str, Any]]:
-        return self._cache_data.get(page_signature)
+        cached = self._cache_data.get(page_signature)
+        if not cached:
+            return None
+        if cached.get("cache_version") != _CACHE_VERSION:
+            return None
+        return cached
 
     def put(self, page_signature: str, semantic_info: Any) -> None:
         serialized_nodes = []
@@ -37,7 +45,12 @@ class SemanticCache:
                 "node_path": n_info.node.path,
                 "role": n_info.role.value,
                 "risk_level": n_info.risk_level,
-                "role_reason": n_info.role_reason
+                "role_reason": n_info.role_reason,
+                "priority_score": n_info.priority_score,
+                "confidence": getattr(n_info, "confidence", 0.0),
+                "semantic_source": getattr(n_info, "semantic_source", "rule"),
+                "is_actionable": getattr(n_info, "is_actionable", True),
+                "actionability_reason": getattr(n_info, "actionability_reason", ""),
             })
 
         llm_enriched_node_count = sum(
@@ -47,7 +60,7 @@ class SemanticCache:
         )
 
         self._cache_data[page_signature] = {
-            "cache_version": 1,
+            "cache_version": _CACHE_VERSION,
             "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "category": semantic_info.category.value,
             "category_reason": semantic_info.category_reason,
@@ -55,6 +68,8 @@ class SemanticCache:
             "has_high_risk": semantic_info.has_high_risk,
             "semantic_source": getattr(semantic_info, "semantic_source", "rule"),
             "llm_enriched_node_count": llm_enriched_node_count,
+            "actionable_candidate_count": getattr(semantic_info, "actionable_candidate_count", 0),
+            "degraded_mode": getattr(semantic_info, "degraded_mode", False),
             "node_semantics": serialized_nodes
         }
         self._save_cache()

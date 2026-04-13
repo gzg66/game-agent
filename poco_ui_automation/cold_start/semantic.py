@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import re
 
 from .config import GameConfig
 from .observation import ObservedNode, PageObservation
@@ -61,6 +62,10 @@ class NodeSemanticInfo:
     risk_level: int = 0  # 0=安全 1=低风险 2=高风险
     priority_score: float = 0.0
     role_reason: str = ""
+    confidence: float = 0.0
+    semantic_source: str = "rule"
+    is_actionable: bool = True
+    actionability_reason: str = ""
 
 
 @dataclass
@@ -78,6 +83,8 @@ class PageSemanticInfo:
     llm_candidate_count: int = 0
     llm_enriched_node_count: int = 0
     llm_pending: bool = False
+    actionable_candidate_count: int = 0
+    degraded_mode: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +111,7 @@ class SemanticAnalyzer:
         has_high_risk = False
         has_popup = category == PageCategory.DIALOG
 
-        for node in observation.clickable_nodes:
+        for node in observation.actionable_candidates:
             sem = self._classify_node(node)
             node_semantics.append(sem)
             if sem.risk_level >= 2:
@@ -122,6 +129,7 @@ class SemanticAnalyzer:
             has_popup=has_popup,
             has_high_risk=has_high_risk,
             node_semantics=node_semantics,
+            actionable_candidate_count=len(observation.actionable_candidates),
         )
 
     # ---- 页面分类 ----
@@ -163,8 +171,8 @@ class SemanticAnalyzer:
     # ---- 控件分类 ----
 
     def _classify_node(self, node: ObservedNode) -> NodeSemanticInfo:
-        """对单个可交互控件进行语义角色分类。"""
-        node_text = f"{node.name} {node.text} {node.path}".lower()
+        """对单个候选控件进行语义角色分类。"""
+        node_text = f"{node.name} {node.text}".lower()
 
         best_role = ControlRole.UNKNOWN
         best_score = 0
@@ -174,7 +182,7 @@ class SemanticAnalyzer:
             score = 0
             matched: list[str] = []
             for kw in keywords:
-                if kw.lower() in node_text:
+                if _keyword_matches_node(kw, node_text):
                     score += 1
                     matched.append(kw)
             if score > best_score:
@@ -185,17 +193,27 @@ class SemanticAnalyzer:
                     best_role = ControlRole.UNKNOWN
                 best_reason = f"匹配: {', '.join(matched)}"
 
+        confidence = self._compute_rule_confidence(best_score, node)
+        best_role, best_reason, confidence = self._apply_structural_heuristics(
+            node,
+            best_role,
+            best_reason,
+            confidence,
+            best_score,
+        )
+
         # 风险评估
         risk_level = 0
         if best_role == ControlRole.DANGEROUS_ACTION:
             risk_level = 2
-        elif any(kw.lower() in node_text for kw in self.config.dangerous_keywords):
+        elif any(_keyword_matches_node(kw, node_text) for kw in self.config.dangerous_keywords):
             risk_level = 2
             best_role = ControlRole.DANGEROUS_ACTION
             best_reason = "命中危险关键字"
+            confidence = max(confidence, 0.95)
 
         # 优先级评分
-        priority_score = self._compute_priority(best_role, node, risk_level)
+        priority_score = self._compute_priority(best_role, node, risk_level, confidence)
 
         return NodeSemanticInfo(
             node=node,
@@ -203,9 +221,57 @@ class SemanticAnalyzer:
             risk_level=risk_level,
             priority_score=priority_score,
             role_reason=best_reason,
+            confidence=confidence,
+            semantic_source="rule",
+            is_actionable=True,
+            actionability_reason=node.candidate_reason or "rule_candidate",
         )
 
-    def _compute_priority(self, role: ControlRole, node: ObservedNode, risk_level: int) -> float:
+    def _apply_structural_heuristics(
+        self,
+        node: ObservedNode,
+        best_role: ControlRole,
+        best_reason: str,
+        confidence: float,
+        best_score: int,
+    ) -> tuple[ControlRole, str, float]:
+        if best_score > 0:
+            return best_role, best_reason, confidence
+
+        lowered_name = (node.name or "").lower()
+        lowered_text = (node.text or "").lower()
+        lowered_type = (node.node_type or "").lower()
+        combined = f"{lowered_name} {lowered_text}"
+
+        if lowered_name.startswith("btn") and any(token in combined for token in ("login", "登录", "enter", "start", "submit")):
+            return ControlRole.PRIMARY_ENTRY, "结构启发: btn + entry token", max(confidence, 0.7)
+        if lowered_name.startswith("btn") and any(token in combined for token in ("close", "关闭", "back", "返回")):
+            role = ControlRole.CLOSE if any(token in combined for token in ("close", "关闭")) else ControlRole.BACK
+            return role, "结构启发: btn + return token", max(confidence, 0.7)
+        if lowered_name.startswith("input") or lowered_type == "editbox":
+            return best_role, "结构启发: 输入控件", max(confidence, 0.35)
+
+        return best_role, best_reason, confidence
+
+    def _compute_rule_confidence(self, best_score: int, node: ObservedNode) -> float:
+        confidence = 0.2
+        if best_score > 0:
+            confidence = min(0.35 + best_score * 0.2, 0.9)
+        if node.clickable:
+            confidence += 0.05
+        if node.interactive:
+            confidence += 0.05
+        if node.candidate_score >= 4.0:
+            confidence += 0.05
+        return min(confidence, 0.95)
+
+    def _compute_priority(
+        self,
+        role: ControlRole,
+        node: ObservedNode,
+        risk_level: int,
+        confidence: float,
+    ) -> float:
         """计算控件探索优先级。
 
         冷启动阶段优先级：
@@ -231,6 +297,9 @@ class SemanticAnalyzer:
         # 有文本的控件优先（可读性强）
         if node.text:
             score += 5.0
+
+        score += confidence * 10.0
+        score += min(node.candidate_score, 6.0) * 2.0
 
         # 可见且位置有效的控件优先
         if node.pos and isinstance(node.pos, list) and len(node.pos) == 2:
@@ -260,9 +329,19 @@ class SemanticAnalyzer:
             if any(hint in combined for hint in popup_hints):
                 return True
         # 如果有 close 按钮在浅层级，可能是弹窗
-        for node in obs.clickable_nodes:
+        for node in obs.actionable_candidates:
             if node.depth <= 3:
                 combined = f"{node.name} {node.text}".lower()
                 if any(kw in combined for kw in ["close", "关闭", "x"]):
                     return True
         return False
+
+
+def _keyword_matches_node(keyword: str, node_text: str) -> bool:
+    lowered_keyword = keyword.lower().strip()
+    if not lowered_keyword:
+        return False
+    if len(lowered_keyword) == 1 and lowered_keyword.isascii() and lowered_keyword.isalpha():
+        pattern = rf"(?<![a-z0-9_]){re.escape(lowered_keyword)}(?![a-z0-9_])"
+        return bool(re.search(pattern, node_text))
+    return lowered_keyword in node_text

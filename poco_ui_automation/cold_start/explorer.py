@@ -543,9 +543,9 @@ class ColdStartExplorer:
                 "title": obs.title,
                 "total_nodes": len(obs.all_nodes),
                 "clickable_nodes": len(obs.clickable_nodes),
+                "actionable_candidates": len(obs.actionable_candidates),
                 "text_nodes": len(obs.text_nodes),
             })
-            self._dump_first_screen_nodes(obs)
 
             if self._looks_like_android_shell_only(obs):
                 obs.metadata["ui_tree_not_exposed"] = True
@@ -559,43 +559,6 @@ class ColdStartExplorer:
                     "suggestion": "请改用接入游戏引擎 Poco SDK 的构建，或补充基于截图/OCR 的兜底点击方案。",
                 })
             return obs
-
-    def _dump_first_screen_nodes(self, observation: PageObservation) -> None:
-            """把首屏所有节点逐条打印到终端与 JSONL 日志，便于排查节点识别问题。"""
-            total = len(observation.all_nodes)
-            print(f"[冷启动] ========== 首屏节点明细，共 {total} 个 ==========")
-
-            for idx, node in enumerate(observation.all_nodes, start=1):
-                node_payload = {
-                    "index": idx,
-                    "name": node.name,
-                    "text": node.text,
-                    "type": node.node_type,
-                    "path": node.path,
-                    "depth": node.depth,
-                    "visible": node.visible,
-                    "clickable": node.clickable,
-                    "interactive": node.interactive,
-                    "pos": node.pos,
-                    "size": node.size,
-                    "components": node.components,
-                }
-                print(
-                    f"[冷启动][节点 {idx:03d}] "
-                    f"name={node.name!r} text={node.text!r} type={node.node_type!r} "
-                    f"clickable={node.clickable} interactive={node.interactive} "
-                    f"visible={node.visible} depth={node.depth} pos={node.pos} "
-                    f"size={node.size} path={node.path!r} components={node.components}"
-                )
-                _log_event(
-                    self.log_path,
-                    {
-                        "kind": "first_screen_node",
-                        "signature": observation.signature,
-                        "title": observation.title,
-                        **node_payload,
-                    },
-                )
 
     # ================================================================
     # 步骤 3/4/5：递归探索
@@ -634,7 +597,7 @@ class ColdStartExplorer:
                 category=page_sem.category.value,
                 is_popup=page_sem.has_popup,
                 is_high_risk=page_sem.has_high_risk,
-                action_count=len(observation.clickable_nodes),
+                action_count=len(observation.actionable_candidates),
                 step=self._step_counter,
             )
 
@@ -652,6 +615,7 @@ class ColdStartExplorer:
                 "category_confidence": page_sem.category_confidence,
                 "has_popup": page_sem.has_popup,
                 "has_high_risk": page_sem.has_high_risk,
+                "actionable_candidate_count": len(observation.actionable_candidates),
                 "clickable_count": len(observation.clickable_nodes),
                 "text_count": len(observation.text_nodes),
                 "visit_count": visit_count,
@@ -660,6 +624,7 @@ class ColdStartExplorer:
                 "llm_candidate_count": page_sem.llm_candidate_count,
                 "llm_enriched_node_count": page_sem.llm_enriched_node_count,
                 "llm_pending": page_sem.llm_pending,
+                "degraded_mode": page_sem.degraded_mode,
             }
 
             _log_event(self.log_path, {
@@ -680,6 +645,8 @@ class ColdStartExplorer:
                 "llm_candidate_count": page_sem.llm_candidate_count,
                 "llm_enriched_node_count": page_sem.llm_enriched_node_count,
                 "llm_pending": page_sem.llm_pending,
+                "actionable_candidate_count": len(observation.actionable_candidates),
+                "degraded_mode": page_sem.degraded_mode,
             })
 
             # 【修改点 1：移除原本的“页面一波流”粗暴截断机制】
@@ -698,6 +665,7 @@ class ColdStartExplorer:
                 "candidates": [c.to_dict() for c in candidates[:5]],  # 前 5 个
                 "semantic_source": page_sem.semantic_source,
                 "cache_hit": page_sem.cache_hit,
+                "degraded_mode": page_sem.degraded_mode,
             })
 
             # 【修改点 2：新增基于动作集的精细化退出判定】
@@ -715,6 +683,16 @@ class ColdStartExplorer:
                         "reason": self.result.stop_reason,
                         "signature": sig,
                         "engine": self.config.engine_type,
+                    })
+                elif not self.result.stop_reason:
+                    self.result.stop_reason = "no_actionable_candidates"
+                    _log_event(self.log_path, {
+                        "kind": "stop",
+                        "msg": "当前页面没有通过排序与置信度过滤的可执行动作，终止探索。",
+                        "reason": self.result.stop_reason,
+                        "signature": sig,
+                        "semantic_source": page_sem.semantic_source,
+                        "degraded_mode": page_sem.degraded_mode,
                     })
                 return
 
@@ -1075,7 +1053,7 @@ class ColdStartExplorer:
         """判断当前 UI 树是否只暴露了 Android 原生容器壳。"""
         if self.config.engine_type != ENGINE_ANDROID_UIAUTOMATION:
             return False
-        if observation.clickable_nodes or observation.text_nodes:
+        if observation.actionable_candidates or observation.text_nodes:
             return False
         if len(observation.all_nodes) > 12:
             return False

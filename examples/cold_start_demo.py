@@ -11,8 +11,8 @@
     python examples/cold_start_demo.py --config examples/cold_start_game_config.yaml \
         --max-steps 100 --max-pages 20 --output outputs/my_cold_start
 
-    # 启用视觉大模型进行 SoM 语义分析 (新增)
-    python examples/cold_start_demo.py --enable-vision --llm-api-key "sk-xxxxxx"
+    # 默认启用视觉大模型；也可显式传入 API Key
+    python examples/cold_start_demo.py --llm-api-key "sk-xxxxxx"
 
 切换游戏的方式：
     1. 复制 cold_start_game_config.yaml 并修改 engine_type / package_name / activity_name 等
@@ -323,8 +323,47 @@ def main() -> None:
     parser.add_argument("--output", default=argparse.SUPPRESS, help=f"输出目录（默认: {default_config.output_dir}）")
     
     # 【新增】视觉大模型相关参数
-    parser.add_argument("--enable-vision", action="store_true", help="是否启用视觉大模型进行 SoM 语义分析")
-    parser.add_argument("--llm-api-key", default=None, help="大模型 API Key（可选，也可通过环境变量或项目根目录 .env 中的 LLM_API_KEY 配置）")
+    parser.add_argument(
+        "--enable-vision",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="是否启用视觉大模型进行 SoM 语义分析（默认开启，可用 --no-enable-vision 关闭）",
+    )
+    parser.add_argument(
+        "--llm-api-key",
+        default=os.environ.get("LLM_API_KEY"),
+        help="大模型 API Key（默认读取环境变量或项目根目录 .env 中的 LLM_API_KEY）",
+    )
+    parser.add_argument(
+        "--vision-mode",
+        choices=["rule_first", "vision_first"],
+        default=argparse.SUPPRESS,
+        help=f"视觉模式（默认: {default_config.vision_mode}）",
+    )
+    parser.add_argument(
+        "--vision-max-candidates",
+        type=int,
+        default=argparse.SUPPRESS,
+        help=f"送入视觉模型的最大候选数（默认: {default_config.vision_max_candidates}）",
+    )
+    parser.add_argument(
+        "--vision-min-confidence",
+        type=float,
+        default=argparse.SUPPRESS,
+        help=f"执行动作的最低视觉置信度（默认: {default_config.vision_min_confidence}）",
+    )
+    parser.add_argument(
+        "--vision-allow-low-confidence",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="允许执行低于阈值的低置信动作",
+    )
+    parser.add_argument(
+        "--vision-max-calls-per-page",
+        type=int,
+        default=argparse.SUPPRESS,
+        help=f"每页最多同步视觉调用次数（默认: {default_config.vision_max_calls_per_page}）",
+    )
 
     args = parser.parse_args()
 
@@ -364,8 +403,20 @@ def main() -> None:
         config.action_wait_s = args.action_wait
     if hasattr(args, "output"):
         config.output_dir = args.output
+    if hasattr(args, "vision_mode"):
+        config.vision_mode = args.vision_mode
+    if hasattr(args, "vision_max_candidates"):
+        config.vision_max_candidates = args.vision_max_candidates
+    if hasattr(args, "vision_min_confidence"):
+        config.vision_min_confidence = args.vision_min_confidence
+    if hasattr(args, "vision_allow_low_confidence"):
+        config.vision_allow_low_confidence = args.vision_allow_low_confidence
+    if hasattr(args, "vision_max_calls_per_page"):
+        config.vision_max_calls_per_page = args.vision_max_calls_per_page
 
     detect_runtime_config(config)
+    if args.enable_vision and not hasattr(args, "vision_mode"):
+        config.vision_mode = "vision_first"
     config.validate()
 
     # 打印配置摘要
@@ -375,13 +426,22 @@ def main() -> None:
     print(f"[冷启动] 设备: {config.device_serial}")
     print(f"[冷启动] Poco: {config.poco_host}:{config.effective_poco_port()}")
     print(f"[冷启动] 最大步数: {config.max_steps}, 最大页面: {config.max_pages}")
+    print(f"[冷启动] 视觉模式: {config.vision_mode}")
     print(f"[冷启动] 输出目录: {config.output_dir}")
     
     # 【新增】初始化 LLM Client
     llm_client = None
     if args.enable_vision:
-        api_key = args.llm_api_key or os.environ.get("LLM_API_KEY", "dummy_key")
+        api_key = args.llm_api_key or os.environ.get("LLM_API_KEY")
+        if not api_key:
+            raise ValueError("已默认启用视觉大模型，但未找到 API Key。请在项目根目录 .env 中设置 LLM_API_KEY，或通过 --llm-api-key 传入。")
         print(f"[冷启动] 已启用视觉大模型增强，API_KEY: {api_key[:5]}***")
+        print(
+            "[冷启动] 视觉参数: "
+            f"max_candidates={config.vision_max_candidates}, "
+            f"min_confidence={config.vision_min_confidence}, "
+            f"allow_low_confidence={config.vision_allow_low_confidence}"
+        )
         llm_client = VisionLLMClient(api_key=api_key)
     else:
         print("[冷启动] 未启用视觉大模型，仅使用纯规则快车道进行探索。")
