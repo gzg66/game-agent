@@ -34,6 +34,7 @@ class EnhancedSemanticAnalyzer(SemanticAnalyzer):
             "llm_enriched_nodes": 0,
             "llm_calls_saved_by_cache": 0,
             "total_llm_latency_ms": 0.0,
+            "vision_llm_skipped_pages": 0,
         }
 
     def analyze(self, observation: PageObservation) -> PageSemanticInfo:
@@ -78,6 +79,11 @@ class EnhancedSemanticAnalyzer(SemanticAnalyzer):
         page_semantic.semantic_source = "rule"
         page_semantic.cache_hit = False
         page_semantic.actionable_candidate_count = len(observation.actionable_candidates)
+        page_semantic.blocked_action_count = sum(
+            1
+            for node_info in page_semantic.node_semantics
+            if node_info.blocked_reason or node_info.unlock_hint_text
+        )
         page_semantic.llm_enriched_node_count = 0
         page_semantic.llm_pending = False
 
@@ -98,8 +104,21 @@ class EnhancedSemanticAnalyzer(SemanticAnalyzer):
         })
 
         llm_available = bool(self.vision_service.llm_client and observation.screenshot_path)
+        skip_llm = False
         if vision_mode == "vision_first":
-            if llm_available and vision_candidates:
+            skip_llm = self._should_skip_vision_llm(observation, page_semantic)
+            if skip_llm:
+                self._increment_stat("vision_llm_skipped_pages")
+                self._emit_event({
+                    "kind": "vision_llm_skipped",
+                    "signature": page_sig,
+                    "page_title": observation.title,
+                    "category": page_semantic.category.value,
+                    "category_confidence": page_semantic.category_confidence,
+                    "unknown_count": unknown_count,
+                    "reason": "simple_page_rule_sufficient",
+                })
+            elif llm_available and vision_candidates:
                 self._run_sync_vision(observation, page_semantic, vision_candidates)
             else:
                 page_semantic.degraded_mode = True
@@ -115,15 +134,46 @@ class EnhancedSemanticAnalyzer(SemanticAnalyzer):
 
         self.cache.put(page_sig, page_semantic)
         self._increment_stat("cache_write_count")
+        if page_semantic.llm_enriched_node_count:
+            write_reason = "vision_enriched"
+        elif skip_llm:
+            write_reason = "rule_llm_skipped"
+        else:
+            write_reason = "base_rule_only"
         self._emit_event({
             "kind": "semantic_cache_written",
             "signature": page_sig,
             "page_title": observation.title,
             "node_semantic_count": len(page_semantic.node_semantics),
             "llm_updated_count": page_semantic.llm_enriched_node_count,
-            "write_reason": "vision_enriched" if page_semantic.llm_enriched_node_count else "base_rule_only",
+            "write_reason": write_reason,
         })
         return page_semantic
+
+    def _should_skip_vision_llm(
+        self,
+        observation: PageObservation,
+        page_semantic: PageSemanticInfo,
+    ) -> bool:
+        """vision_first 下是否跳过 SoM/LLM：登录等简单页用规则即可。"""
+        cats = getattr(self.config, "vision_skip_llm_for_categories", None) or []
+        min_conf = float(getattr(self.config, "vision_skip_llm_min_page_category_confidence", 0.25))
+        cat_val = page_semantic.category.value
+        if cats and cat_val in cats and page_semantic.category_confidence >= min_conf:
+            return True
+        markers = getattr(self.config, "vision_skip_llm_text_markers_any", None) or []
+        if not markers:
+            return False
+        blob = self._observation_text_blob(observation)
+        return any(m.strip() and m.lower() in blob for m in markers if m)
+
+    @staticmethod
+    def _observation_text_blob(observation: PageObservation) -> str:
+        parts: list[str] = [observation.title or ""]
+        for node in observation.all_nodes:
+            if node.text:
+                parts.append(node.text)
+        return " ".join(parts).lower()
 
     def _run_sync_vision(
         self,
@@ -294,6 +344,9 @@ class EnhancedSemanticAnalyzer(SemanticAnalyzer):
                     semantic_source=str(cached_node.get("semantic_source", "cache")),
                     is_actionable=bool(cached_node.get("is_actionable", True)),
                     actionability_reason=str(cached_node.get("actionability_reason", "cached")),
+                    blocked_reason=str(cached_node.get("blocked_reason", "")),
+                    unlock_hint_text=str(cached_node.get("unlock_hint_text", "")),
+                    unlock_condition=str(cached_node.get("unlock_condition", "")),
                 ))
             else:
                 node_semantics.append(self._classify_node(node))
@@ -312,6 +365,16 @@ class EnhancedSemanticAnalyzer(SemanticAnalyzer):
             llm_enriched_node_count=cached_data.get("llm_enriched_node_count", 0),
             llm_pending=False,
             actionable_candidate_count=int(cached_data.get("actionable_candidate_count", len(obs.actionable_candidates))),
+            blocked_action_count=int(
+                cached_data.get(
+                    "blocked_action_count",
+                    sum(
+                        1
+                        for node_info in node_semantics
+                        if node_info.blocked_reason or node_info.unlock_hint_text
+                    ),
+                )
+            ),
             degraded_mode=bool(cached_data.get("degraded_mode", False)),
         )
 

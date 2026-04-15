@@ -32,6 +32,9 @@ class CandidateAction:
     tier: int = 2  # 【核心修改 1】：新增动作梯队属性，数值越大越优先执行
     confidence: float = 0.0
     semantic_source: str = "rule"
+    blocked_reason: str = ""
+    unlock_hint_text: str = ""
+    unlock_condition: str = ""
 
     @property
     def action_key(self) -> str:
@@ -57,6 +60,9 @@ class CandidateAction:
             "tier": self.tier,
             "confidence": round(self.confidence, 3),
             "semantic_source": self.semantic_source,
+            "blocked_reason": self.blocked_reason,
+            "unlock_hint_text": self.unlock_hint_text,
+            "unlock_condition": self.unlock_condition,
             "reason": self.reason,
         }
 
@@ -70,7 +76,7 @@ class ColdStartActionPlanner:
 
     def __init__(self, config: GameConfig) -> None:
         self.config = config
-        self._explored_actions: set[str] = set()  # page_sig::action_key
+        self._explored_actions: set[str] = set()  # page_sig::action_key 与 shell_nav::action_key
 
     def plan(
         self,
@@ -125,6 +131,14 @@ class ColdStartActionPlanner:
                     tier = 1  # Tier 1: 常规页面的兜底回退梯队
                     reason_parts.append("Tier 1: 兜底回退结构后置")
 
+            if sem.blocked_reason or sem.unlock_hint_text:
+                priority -= 35.0
+                if tier > 1:
+                    tier = 1
+                reason_parts.append(f"受阻={sem.blocked_reason or 'unlock_hint_detected'}")
+                if sem.unlock_condition:
+                    reason_parts.append(f"条件={sem.unlock_condition}")
+
             # 安全关键字匹配加分（仅影响同梯队内部排名）
             node_text = f"{node.name} {node.text}".lower()
             safe_match = [kw for kw in self.config.safe_priority_keywords if kw.lower() in node_text]
@@ -150,6 +164,9 @@ class ColdStartActionPlanner:
                 tier=tier, # 录入梯队信息
                 confidence=sem.confidence,
                 semantic_source=sem.semantic_source,
+                blocked_reason=sem.blocked_reason,
+                unlock_hint_text=sem.unlock_hint_text,
+                unlock_condition=sem.unlock_condition,
             ))
 
         # 【核心修改 4】：使用组合键排序 (Tuple Sorting)
@@ -161,11 +178,21 @@ class ColdStartActionPlanner:
         max_actions = self.config.max_actions_per_page
         return candidates[:max_actions]
 
-    def mark_explored(self, page_signature: str, action_key: str) -> None:
+    def mark_explored(
+        self, page_signature: str, action_key: str, node: ObservedNode | None = None
+    ) -> None:
         self._explored_actions.add(f"{page_signature}::{action_key}")
+        if node is not None and _path_matches_shell_nav(node.path, self.config):
+            self._explored_actions.add(f"shell_nav::{action_key}")
 
-    def is_explored(self, page_signature: str, action_key: str) -> bool:
-        return f"{page_signature}::{action_key}" in self._explored_actions
+    def is_explored(
+        self, page_signature: str, action_key: str, node: ObservedNode | None = None
+    ) -> bool:
+        if f"{page_signature}::{action_key}" in self._explored_actions:
+            return True
+        if node is not None and _path_matches_shell_nav(node.path, self.config):
+            return f"shell_nav::{action_key}" in self._explored_actions
+        return False
 
     @property
     def total_explored(self) -> int:
@@ -175,6 +202,13 @@ class ColdStartActionPlanner:
 # ---------------------------------------------------------------------------
 # 工具函数
 # ---------------------------------------------------------------------------
+
+
+def _path_matches_shell_nav(path: str, config: GameConfig) -> bool:
+    markers = getattr(config, "shell_nav_path_markers", None) or ["MainSysBarView"]
+    return any(m and m in path for m in markers)
+
+
 def _is_valid_pos(node: ObservedNode) -> bool:
     """检查节点位置是否有效。"""
     pos = node.pos

@@ -142,8 +142,24 @@ def run_adb(device_serial: str, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def run_adb_global(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [adb_path(), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+    )
+
+
 def adb_output(device_serial: str, *args: str) -> str:
     result = run_adb(device_serial, *args)
+    return (result.stdout or result.stderr or "").strip()
+
+
+def adb_global_output(*args: str) -> str:
+    result = run_adb_global(*args)
     return (result.stdout or result.stderr or "").strip()
 
 
@@ -153,6 +169,27 @@ def device_serial_from_uri(device_uri: str) -> str:
     if "://" in device_uri:
         return device_uri.split("://", 1)[1]
     return device_uri
+
+
+def is_adb_device_ready(device_serial: str, devices_output: str) -> bool:
+    return f"{device_serial}\tdevice" in devices_output
+
+
+def try_auto_connect_device(device_serial: str) -> bool:
+    """对本地 adb tcp 设备执行一次 adb connect，降低模拟器首次未注册的失败率。"""
+    if not device_serial or ":" not in device_serial:
+        return False
+
+    host, _, port_text = device_serial.rpartition(":")
+    if not host or not port_text.isdigit():
+        return False
+
+    connect_output = adb_global_output("connect", device_serial)
+    if connect_output:
+        print(f"[冷启动][检测] 自动执行 adb connect {device_serial}: {connect_output}")
+
+    normalized = connect_output.lower()
+    return "connected to" in normalized or "already connected to" in normalized
 
 
 def resolve_launch_activity(device_serial: str, package_name: str) -> str:
@@ -193,8 +230,12 @@ def detect_runtime_config(config: GameConfig) -> None:
     if not config.device_serial and config.device_uri:
         config.device_serial = device_serial_from_uri(config.device_uri)
 
-    devices_output = adb_output(config.device_serial, "devices")
-    if config.device_serial not in devices_output or "\tdevice" not in devices_output:
+    devices_output = adb_global_output("devices")
+    if not is_adb_device_ready(config.device_serial, devices_output):
+        try_auto_connect_device(config.device_serial)
+        devices_output = adb_global_output("devices")
+
+    if not is_adb_device_ready(config.device_serial, devices_output):
         raise RuntimeError(
             f"设备未连接或状态异常: {config.device_serial}。请先确认 adb devices 可见该设备。"
         )

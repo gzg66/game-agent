@@ -66,6 +66,9 @@ class NodeSemanticInfo:
     semantic_source: str = "rule"
     is_actionable: bool = True
     actionability_reason: str = ""
+    blocked_reason: str = ""
+    unlock_hint_text: str = ""
+    unlock_condition: str = ""
 
 
 @dataclass
@@ -84,6 +87,7 @@ class PageSemanticInfo:
     llm_enriched_node_count: int = 0
     llm_pending: bool = False
     actionable_candidate_count: int = 0
+    blocked_action_count: int = 0
     degraded_mode: bool = False
 
 
@@ -130,6 +134,11 @@ class SemanticAnalyzer:
             has_high_risk=has_high_risk,
             node_semantics=node_semantics,
             actionable_candidate_count=len(observation.actionable_candidates),
+            blocked_action_count=sum(
+                1
+                for sem in node_semantics
+                if sem.blocked_reason or sem.unlock_hint_text
+            ),
         )
 
     # ---- 页面分类 ----
@@ -147,17 +156,25 @@ class SemanticAnalyzer:
 
         best_category = PageCategory.UNKNOWN
         best_score = 0
+        best_max_kw_len = 0
         best_reason = ""
 
         for cat_name, keywords in self.config.page_type_hints.items():
             score = 0
             matched: list[str] = []
+            max_kw_len = 0
             for kw in keywords:
-                if kw.lower() in all_text:
+                if _page_type_keyword_matches(kw, all_text):
                     score += 1
                     matched.append(kw)
-            if score > best_score:
+                    max_kw_len = max(max_kw_len, len(kw))
+            # 平局时优先「更长关键词命中」的类别，避免仅因 dict 顺序把带调试条「账号:」的局内页判成 login
+            better = score > best_score or (
+                score == best_score and score > 0 and max_kw_len > best_max_kw_len
+            )
+            if better:
                 best_score = score
+                best_max_kw_len = max_kw_len
                 try:
                     best_category = PageCategory(cat_name)
                 except ValueError:
@@ -246,6 +263,10 @@ class SemanticAnalyzer:
         if lowered_name.startswith("btn") and any(token in combined for token in ("login", "登录", "enter", "start", "submit")):
             return ControlRole.PRIMARY_ENTRY, "结构启发: btn + entry token", max(confidence, 0.7)
         if lowered_name.startswith("btn") and any(token in combined for token in ("close", "关闭", "back", "返回")):
+            # 名称里含 back/close 但文案是「退出」等时，不得当成返回（常见于主界面无返回、仅有退出）
+            exit_tokens = ("退出", "登出", "quit", "logout")
+            if any(t in combined for t in exit_tokens):
+                return ControlRole.DANGEROUS_ACTION, "结构启发: 疑似退出/登出，非返回", max(confidence, 0.85)
             role = ControlRole.CLOSE if any(token in combined for token in ("close", "关闭")) else ControlRole.BACK
             return role, "结构启发: btn + return token", max(confidence, 0.7)
         if lowered_name.startswith("input") or lowered_type == "editbox":
@@ -335,6 +356,21 @@ class SemanticAnalyzer:
                 if any(kw in combined for kw in ["close", "关闭", "x"]):
                     return True
         return False
+
+
+def _page_type_keyword_matches(keyword: str, haystack: str) -> bool:
+    """页面类型提示词是否命中。短词易与调试文案冲突时单独处理。"""
+    kw = keyword.strip()
+    if not kw:
+        return False
+    low_kw = kw.lower()
+    low_hay = haystack.lower()
+    # 顶栏「账号: xxx」「账号：xxx」勿当作登录页特征
+    if low_kw == "账号":
+        return bool(re.search(r"账号(?![:：])", haystack))
+    if low_kw == "account":
+        return bool(re.search(r"(?<![a-z0-9_])account(?![a-z0-9_:：])", low_hay))
+    return low_kw in low_hay
 
 
 def _keyword_matches_node(keyword: str, node_text: str) -> bool:

@@ -145,6 +145,7 @@ class ExplorationGraph:
         success: bool = True,
         page_changed: bool = True,
         risk_level: int = 0,
+        metadata: dict[str, Any] | None = None,
     ) -> TransitionEdge:
         """添加或更新一条转移边。"""
         lookup_key = (from_sig, to_sig, action_key)
@@ -156,6 +157,8 @@ class ExplorationGraph:
                 edge.success_count += 1
             else:
                 edge.fail_count += 1
+            if metadata:
+                edge.metadata.update(metadata)
             return edge
 
         edge = TransitionEdge(
@@ -168,6 +171,7 @@ class ExplorationGraph:
             fail_count=0 if success else 1,
             is_page_changed=page_changed,
             risk_level=risk_level,
+            metadata=metadata or {},
         )
         self._edge_lookup[lookup_key] = len(self.edges)
         self.edges.append(edge)

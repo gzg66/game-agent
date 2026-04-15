@@ -8,6 +8,32 @@ class SoMVisionService:
     def __init__(self, llm_client: Any):
         self.llm_client = llm_client
 
+    def _encode_image_to_base64(
+        self,
+        image_path: str,
+        crop_ratio: tuple[float, float, float, float] | None = None,
+    ) -> str:
+        if not image_path:
+            return ""
+
+        img = cv2.imread(image_path)
+        if img is None:
+            return ""
+
+        if crop_ratio is not None:
+            x1_ratio, y1_ratio, x2_ratio, y2_ratio = crop_ratio
+            h, w = img.shape[:2]
+            x1 = max(0, min(w - 1, int(w * x1_ratio)))
+            y1 = max(0, min(h - 1, int(h * y1_ratio)))
+            x2 = max(x1 + 1, min(w, int(w * x2_ratio)))
+            y2 = max(y1 + 1, min(h, int(h * y2_ratio)))
+            img = img[y1:y2, x1:x2]
+
+        ok, buffer = cv2.imencode(".jpg", img)
+        if not ok:
+            return ""
+        return base64.b64encode(buffer).decode("utf-8")
+
     def draw_marks_and_get_base64(self, image_path: str, unknown_nodes: list) -> tuple[str, dict[str, str]]:
         if not image_path:
             return "", {}
@@ -38,6 +64,50 @@ class SoMVisionService:
         _, buffer = cv2.imencode('.jpg', img)
         b64_str = base64.b64encode(buffer).decode('utf-8')
         return b64_str, node_mapping
+
+    def detect_blocked_hint(self, image_path: str) -> dict[str, str]:
+        """从动作后截图中提取居中的受阻提示条/Toast 文本。"""
+        if not image_path or not self.llm_client:
+            return {}
+
+        # 优先裁剪界面中部区域，降低页面常驻文案干扰。
+        cropped_b64 = self._encode_image_to_base64(
+            image_path,
+            crop_ratio=(0.08, 0.16, 0.92, 0.58),
+        )
+        if not cropped_b64:
+            return {}
+
+        prompt = """
+        这是一张游戏界面动作后的截图中部裁剪图。
+        请判断画面中是否存在“点击后出现的临时提示条 / 黑底 Toast / 受阻提示文案”。
+
+        只输出 JSON，格式如下：
+        {
+          "has_blocked_hint": true,
+          "hint_text": "主角12级且净化区域4开启"
+        }
+
+        要求：
+        1. 只关注居中或显著浮层提示，不要读取地图底图、按钮标题、常驻 UI 文案。
+        2. 如果没有明确的临时提示条，返回：
+           {"has_blocked_hint": false, "hint_text": ""}
+        3. 不要输出 Markdown，不要输出额外解释。
+        """
+        try:
+            response_text = self.llm_client.chat(prompt=prompt, image_base64=cropped_b64)
+            result_json = json.loads(response_text)
+            if not isinstance(result_json, dict):
+                return {}
+
+            has_blocked_hint = bool(result_json.get("has_blocked_hint", False))
+            hint_text = str(result_json.get("hint_text", "")).strip()
+            if not has_blocked_hint or not hint_text:
+                return {}
+            return {"hint_text": hint_text}
+        except Exception as e:
+            print(f"LLM 受阻提示识别失败: {e}")
+            return {}
 
     def analyze_candidates(self, image_path: str, candidate_nodes: list) -> dict[str, dict[str, Any]]:
         if not candidate_nodes or not self.llm_client:

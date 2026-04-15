@@ -10,8 +10,7 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import time
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -76,6 +75,16 @@ class PageObservation:
     captured_at: datetime = field(default_factory=_utc_now)
     metadata: dict[str, Any] = field(default_factory=dict)
     screenshot_path: str = ""  # 【新增】存储本次观测的截图路径
+    normalized_signature: str = ""
+    shell_signature: str = ""
+    content_signature: str = ""
+    overlay_signature: str = ""
+    logical_page_key: str = ""
+    normalized_actionable_paths: frozenset[str] = field(default_factory=frozenset)
+    shell_actionable_paths: frozenset[str] = field(default_factory=frozenset)
+    content_actionable_paths: frozenset[str] = field(default_factory=frozenset)
+    overlay_actionable_paths: frozenset[str] = field(default_factory=frozenset)
+    content_anchor_names: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +105,7 @@ class ObservationCapture:
         actionable = _select_actionable_candidates(all_nodes)
         texts = [n for n in all_nodes if n.text]
         signature = _build_signature(hierarchy, all_nodes)
+        observation_features = _build_observation_features(all_nodes)
         title = _extract_title(all_nodes, hierarchy)
         root_name = _extract_root_name(hierarchy)
 
@@ -109,6 +119,22 @@ class ObservationCapture:
             text_nodes=texts,
             root_node_name=root_name,
             screenshot_path=screenshot_path, # 【修改】保存截图路径
+            normalized_signature=observation_features["normalized_signature"],
+            shell_signature=observation_features["shell_signature"],
+            content_signature=observation_features["content_signature"],
+            overlay_signature=observation_features["overlay_signature"],
+            logical_page_key=_build_logical_page_key(
+                title=title,
+                shell_signature=observation_features["shell_signature"],
+                content_signature=observation_features["content_signature"],
+                content_anchor_names=observation_features["content_anchor_names"],
+                overlay_signature=observation_features["overlay_signature"],
+            ),
+            normalized_actionable_paths=observation_features["normalized_actionable_paths"],
+            shell_actionable_paths=observation_features["shell_actionable_paths"],
+            content_actionable_paths=observation_features["content_actionable_paths"],
+            overlay_actionable_paths=observation_features["overlay_actionable_paths"],
+            content_anchor_names=observation_features["content_anchor_names"],
         )
 
 
@@ -259,24 +285,205 @@ def _actionable_score(node: ObservedNode) -> tuple[float, str]:
     return score, "; ".join(reasons) if reasons else "weak_candidate"
 
 
-def _build_signature(hierarchy: dict[str, Any], nodes: list[ObservedNode]) -> str:
-    """基于节点结构生成页面签名（16 位 hex）。"""
-    parts: list[str] = []
+def _stabilize_signature_text(text: str) -> str:
+    """弱化战力、等级、倒计时等纯数字变化对签名的影响，减轻「同页却判跳转」。"""
+    if not text:
+        return ""
+    t = text.strip()
+    if len(t) > 64:
+        t = t[:64]
+    t = re.sub(r"\d+", "#", t)
+    t = re.sub(r"#+", "#", t)
+    return t.strip()
 
-    def walk(node: dict[str, Any]) -> None:
+
+def _build_signature(hierarchy: dict[str, Any], nodes: list[ObservedNode]) -> str:
+    """基于 UI 树生成页面签名（16 位 hex）。
+
+    v4 版本会先对路径里的容器索引做归一化，降低 `Container/1`、`Container/2`
+    这类壳层索引漂移带来的误判；同时保留节点文本与交互属性，避免把不同内容区
+    粗暴折叠成同一页面。
+    """
+    lines = _signature_lines_from_nodes(nodes)
+    if lines:
+        return _hash_signature_lines("obs_sig_v4", lines)
+
+    # 拍平结果异常为空时退回整树 DFS（无条数截断，text 用嵌套聚合）
+    fb: list[str] = []
+
+    def walk_fb(node: dict[str, Any]) -> None:
         payload = node.get("payload", {}) or {}
+        if not payload.get("visible", True):
+            return
         name = str(node.get("name") or payload.get("name") or "")
-        text = str(payload.get("text") or "")
+        text_fb = _stabilize_signature_text(_nested_text(node).strip())
         clickable = str(payload.get("clickable", False))
-        if name or text:
-            parts.append(f"{name}|{text}|{clickable}")
+        if name or text_fb:
+            fb.append(f"{name}|{text_fb}|{clickable}")
         for child in node.get("children", []) or []:
             if isinstance(child, dict):
-                walk(child)
+                walk_fb(child)
 
-    walk(hierarchy)
-    joined = "\n".join(parts[:80]).encode("utf-8", errors="ignore")
-    return hashlib.sha1(joined).hexdigest()[:16]
+    walk_fb(hierarchy)
+    return _hash_signature_lines("obs_sig_v4_fb", fb)
+
+
+def _build_observation_features(nodes: list[ObservedNode]) -> dict[str, Any]:
+    signal_nodes = _signal_nodes(nodes)
+    shell_nodes = [n for n in signal_nodes if _is_shell_path(n.path)]
+    overlay_nodes = [n for n in signal_nodes if _is_overlay_path(n.path)]
+    content_nodes = [
+        n for n in signal_nodes
+        if not _is_shell_path(n.path) and not _is_overlay_path(n.path)
+    ]
+
+    normalized_actionable_paths = _normalized_interactive_paths(signal_nodes)
+    shell_actionable_paths = _normalized_interactive_paths(shell_nodes)
+    content_actionable_paths = _normalized_interactive_paths(content_nodes)
+    overlay_actionable_paths = _normalized_interactive_paths(overlay_nodes)
+    content_anchor_names = _extract_content_anchor_names(signal_nodes)
+
+    return {
+        "normalized_signature": _hash_signature_lines(
+            "obs_sig_v4_norm",
+            _signature_lines_from_nodes(signal_nodes),
+        ),
+        "shell_signature": _optional_hash_signature_lines(
+            "obs_shell_v1",
+            _signature_lines_from_nodes(shell_nodes),
+        ),
+        "content_signature": _optional_hash_signature_lines(
+            "obs_content_v1",
+            _signature_lines_from_nodes(content_nodes),
+        ),
+        "overlay_signature": _optional_hash_signature_lines(
+            "obs_overlay_v1",
+            _signature_lines_from_nodes(overlay_nodes),
+        ),
+        "normalized_actionable_paths": normalized_actionable_paths,
+        "shell_actionable_paths": shell_actionable_paths,
+        "content_actionable_paths": content_actionable_paths,
+        "overlay_actionable_paths": overlay_actionable_paths,
+        "content_anchor_names": content_anchor_names,
+    }
+
+
+def _build_logical_page_key(
+    title: str,
+    shell_signature: str,
+    content_signature: str,
+    content_anchor_names: tuple[str, ...],
+    overlay_signature: str,
+) -> str:
+    overlay_state = "overlay" if overlay_signature else "no_overlay"
+    title_key = _stabilize_signature_text(title or "unknown_page")
+    anchor_key = ",".join(content_anchor_names[:3]) if content_anchor_names else content_signature[:8]
+    raw = "|".join([
+        shell_signature[:12],
+        title_key,
+        anchor_key,
+        overlay_state,
+    ])
+    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+
+def _signal_nodes(nodes: list[ObservedNode]) -> list[ObservedNode]:
+    return [
+        n for n in nodes
+        if n.visible and (n.clickable or n.interactive or (n.text or "").strip())
+    ]
+
+
+def _signature_lines_from_nodes(nodes: list[ObservedNode]) -> list[str]:
+    lines: list[str] = []
+    for node in nodes:
+        if not node.visible:
+            continue
+        text = (node.text or "").strip()
+        if not (node.clickable or node.interactive or text):
+            continue
+        lines.append(
+            "|".join([
+                _normalize_node_path(node.path),
+                node.name,
+                _stabilize_signature_text(text),
+                str(int(node.clickable)),
+                str(int(node.interactive)),
+            ])
+        )
+    lines.sort()
+    return lines
+
+
+def _hash_signature_lines(prefix: str, lines: list[str]) -> str:
+    joined = prefix + "\n" + "\n".join(lines)
+    raw = joined.encode("utf-8", errors="ignore")
+    if len(raw) > 300_000:
+        raw = raw[:300_000]
+    return hashlib.sha1(raw).hexdigest()[:16]
+
+
+def _optional_hash_signature_lines(prefix: str, lines: list[str]) -> str:
+    if not lines:
+        return ""
+    return _hash_signature_lines(prefix, lines)
+
+
+def _normalize_node_path(path: str) -> str:
+    if not path:
+        return ""
+    return re.sub(r"/\d+:", "/#:", path)
+
+
+def _normalized_interactive_paths(nodes: list[ObservedNode]) -> frozenset[str]:
+    return frozenset(
+        _normalize_node_path(node.path)
+        for node in nodes
+        if node.visible and (node.clickable or node.interactive)
+    )
+
+
+def _extract_content_anchor_names(nodes: list[ObservedNode]) -> tuple[str, ...]:
+    anchors: list[str] = []
+    seen: set[str] = set()
+    for node in nodes:
+        for segment in _path_segments(node.path):
+            lowered = segment.lower()
+            if lowered in _IGNORED_ANCHOR_SEGMENTS:
+                continue
+            if lowered in _SHELL_SEGMENT_MARKERS_LOWER or lowered in _OVERLAY_SEGMENT_MARKERS_LOWER:
+                continue
+            if any(token in lowered for token in _CONTENT_ANCHOR_TOKENS):
+                if segment not in seen:
+                    seen.add(segment)
+                    anchors.append(segment)
+                    if len(anchors) >= 4:
+                        return tuple(anchors)
+    return tuple(anchors)
+
+
+def _path_segments(path: str) -> list[str]:
+    segments: list[str] = []
+    for part in path.split("/"):
+        if not part:
+            continue
+        if ":" in part:
+            _, name = part.split(":", 1)
+        else:
+            name = part
+        if name:
+            segments.append(name)
+    return segments
+
+
+def _is_shell_path(path: str) -> bool:
+    lowered = _normalize_node_path(path).lower()
+    return any(marker in lowered for marker in _SHELL_PATH_MARKERS_LOWER)
+
+
+def _is_overlay_path(path: str) -> bool:
+    lowered = _normalize_node_path(path).lower()
+    return any(marker in lowered for marker in _OVERLAY_PATH_MARKERS_LOWER)
 
 
 def _extract_title(nodes: list[ObservedNode], hierarchy: dict[str, Any]) -> str:
@@ -339,6 +546,60 @@ _NON_ACTIONABLE_EXACT_NAMES = {
     "container",
     "image",
 }
+
+_SHELL_PATH_MARKERS = (
+    "MainSysBarView",
+    "playerBar",
+    "assetsBar",
+    "functionBtnBar",
+    "actionBtnList",
+    "rightTopActionBtnList",
+    "btnChat",
+    "btnExpand",
+)
+
+_OVERLAY_PATH_MARKERS = (
+    "PopWin",
+    "mask",
+    "Mask",
+    "modal",
+    "Modal",
+    "Dialog",
+    "dialog",
+    "Toast",
+    "toast",
+    "Notice",
+    "notice",
+)
+
+_CONTENT_ANCHOR_TOKENS = (
+    "scene",
+    "window",
+    "panel",
+    "view",
+    "chapter",
+    "bag",
+    "battle",
+    "play",
+)
+
+_IGNORED_ANCHOR_SEGMENTS = {
+    "root",
+    "container",
+    "canvas",
+    "groot",
+    "scene",
+    "mainui",
+    "sceneui",
+    "gcomponent",
+    "gbutton",
+    "gtextfield",
+}
+
+_SHELL_SEGMENT_MARKERS_LOWER = {marker.lower() for marker in _SHELL_PATH_MARKERS}
+_OVERLAY_SEGMENT_MARKERS_LOWER = {marker.lower() for marker in _OVERLAY_PATH_MARKERS}
+_SHELL_PATH_MARKERS_LOWER = tuple(marker.lower() for marker in _SHELL_PATH_MARKERS)
+_OVERLAY_PATH_MARKERS_LOWER = tuple(marker.lower() for marker in _OVERLAY_PATH_MARKERS)
 
 
 def _is_valid_normalized_rect(

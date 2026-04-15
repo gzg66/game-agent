@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-_CACHE_VERSION = 3
+_CACHE_VERSION = 4
 
 class SemanticCache:
     def __init__(self, cache_dir: str = "outputs/cold_start/semantic_cache"):
@@ -51,6 +51,9 @@ class SemanticCache:
                 "semantic_source": getattr(n_info, "semantic_source", "rule"),
                 "is_actionable": getattr(n_info, "is_actionable", True),
                 "actionability_reason": getattr(n_info, "actionability_reason", ""),
+                "blocked_reason": getattr(n_info, "blocked_reason", ""),
+                "unlock_hint_text": getattr(n_info, "unlock_hint_text", ""),
+                "unlock_condition": getattr(n_info, "unlock_condition", ""),
             })
 
         llm_enriched_node_count = sum(
@@ -69,6 +72,16 @@ class SemanticCache:
             "semantic_source": getattr(semantic_info, "semantic_source", "rule"),
             "llm_enriched_node_count": llm_enriched_node_count,
             "actionable_candidate_count": getattr(semantic_info, "actionable_candidate_count", 0),
+            "blocked_action_count": getattr(
+                semantic_info,
+                "blocked_action_count",
+                sum(
+                    1
+                    for n_info in semantic_info.node_semantics
+                    if getattr(n_info, "blocked_reason", "")
+                    or getattr(n_info, "unlock_hint_text", "")
+                ),
+            ),
             "degraded_mode": getattr(semantic_info, "degraded_mode", False),
             "node_semantics": serialized_nodes
         }

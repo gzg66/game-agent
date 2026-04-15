@@ -60,17 +60,35 @@ class GameConfig:
     action_wait_s: float = 2.0  # 每次动作后等待秒数
     no_new_page_limit: int = 10  # 连续无新页面步数，达到则停止
 
+    # ---- 页面跳转判定（动作前后）----
+    # 签名已不同，但可交互控件 path 集合仍高度重合时，视为同页抖动，不把 page_changed 置 True
+    page_change_path_jaccard_suppress_above: float = 0.92
+    page_change_shell_min_interactive_paths: int = 8
+    page_change_max_interactive_path_delta: int = 15
+    transition_in_place_path_jaccard_above: float = 0.92
+    transition_in_place_path_delta_max: int = 6
+    transition_content_switch_path_jaccard_below: float = 0.72
+    go_back_accept_same_logical_page: bool = True
+
     # ---- 视觉主导模式 ----
     vision_mode: str = "rule_first"
     vision_max_candidates: int = 16
     vision_min_confidence: float = 0.55
     vision_allow_low_confidence: bool = False
     vision_max_calls_per_page: int = 1
+    # vision_first 下：简单登录/标题页规则即可覆盖，跳过 SoM/LLM 以省延迟与费用
+    vision_skip_llm_for_categories: list[str] = field(default_factory=lambda: ["login"])
+    vision_skip_llm_min_page_category_confidence: float = 0.25
+    # 全文（节点文案 + title）任一包含即跳过 LLM，用于「点击开始冒险」等未判成 login 的标题页
+    vision_skip_llm_text_markers_any: list[str] = field(default_factory=lambda: [
+        "账号登录", "点击开始冒险", "一键注册",
+    ])
 
     # ---- 安全配置 ----
     dangerous_keywords: list[str] = field(default_factory=lambda: [
         "充值", "支付", "购买", "删除", "删除账号", "退出登录",
-        "recharge", "pay", "purchase", "delete",
+        "退出游戏", "退出", "登出",
+        "recharge", "pay", "purchase", "delete", "quit", "logout",
     ])
     safe_priority_keywords: list[str] = field(default_factory=lambda: [
         "关闭", "确认", "确定", "下一步", "开始", "进入", "领取", "跳过", "返回",
@@ -78,10 +96,21 @@ class GameConfig:
         "close", "confirm", "next", "start", "enter", "claim", "skip", "back", "ok",
     ])
 
+    # 主界面底栏等「多页共用同一套控件」的路径片段；命中则探索记录跨 signature 去重，避免换 Tab 后签名变化又重复点同一 Tab
+    shell_nav_path_markers: list[str] = field(default_factory=lambda: ["MainSysBarView"])
+
     # ---- 页面签名关键字（用于页面类型识别） ----
     page_type_hints: dict[str, list[str]] = field(default_factory=lambda: {
-        "login": ["开始游戏", "游客登录", "账号登录", "登录", "login", "账号", "account"],
-        "lobby": ["大厅", "lobby", "主页", "home", "主界面", "冒险", "背包", "任务", "邮件"],
+        "login": [
+            "开始游戏", "游客登录", "账号登录", "手机登录", "密码登录",
+            "登录", "login", "请输入账号", "输入账号", "注册账号",
+            # 仍保留短词，由 semantic._page_type_keyword_matches 排除「账号:」类调试条
+            "账号", "account",
+        ],
+        "lobby": [
+            "大厅", "lobby", "主页", "home", "主界面", "据点", "基地", "营地",
+            "冒险", "背包", "任务", "邮件",
+        ],
         "role_select": ["选角", "角色选择", "角色", "role", "职业"],
         "dialog": ["弹窗", "dialog", "提示", "notice", "公告", "更新公告", "用户协议", "实名认证", "签到弹窗"],
         "guide": ["引导", "guide", "新手", "tutorial", "教程", "下一步"],
@@ -129,8 +158,18 @@ class GameConfig:
             raise ValueError("vision_max_candidates 必须大于 0")
         if not 0.0 <= self.vision_min_confidence <= 1.0:
             raise ValueError("vision_min_confidence 必须位于 0 到 1 之间")
+        if not 0.0 <= self.vision_skip_llm_min_page_category_confidence <= 1.0:
+            raise ValueError("vision_skip_llm_min_page_category_confidence 必须位于 0 到 1 之间")
         if self.vision_max_calls_per_page <= 0:
             raise ValueError("vision_max_calls_per_page 必须大于 0")
+        if not 0.5 <= self.page_change_path_jaccard_suppress_above <= 1.0:
+            raise ValueError("page_change_path_jaccard_suppress_above 建议位于 0.5 到 1.0 之间")
+        if not 0.5 <= self.transition_in_place_path_jaccard_above <= 1.0:
+            raise ValueError("transition_in_place_path_jaccard_above 建议位于 0.5 到 1.0 之间")
+        if self.transition_in_place_path_delta_max < 0:
+            raise ValueError("transition_in_place_path_delta_max 不能为负数")
+        if not 0.0 <= self.transition_content_switch_path_jaccard_below <= 1.0:
+            raise ValueError("transition_content_switch_path_jaccard_below 必须位于 0 到 1 之间")
 
     # ---- 加载方法 ----
     @classmethod
@@ -146,8 +185,17 @@ class GameConfig:
             flat["poco_host"] = data["connection"].get("host", cls.poco_host)
             flat["poco_port"] = data["connection"].get("port", 0)
         if "exploration" in data and isinstance(data["exploration"], dict):
-            for key in ("max_steps", "max_pages", "max_actions_per_page",
-                        "boot_wait_s", "action_wait_s", "no_new_page_limit"):
+            for key in (
+                "max_steps", "max_pages", "max_actions_per_page",
+                "boot_wait_s", "action_wait_s", "no_new_page_limit",
+                "page_change_path_jaccard_suppress_above",
+                "page_change_shell_min_interactive_paths",
+                "page_change_max_interactive_path_delta",
+                "transition_in_place_path_jaccard_above",
+                "transition_in_place_path_delta_max",
+                "transition_content_switch_path_jaccard_below",
+                "go_back_accept_same_logical_page",
+            ):
                 if key in data["exploration"]:
                     flat[key] = data["exploration"][key]
         if "vision" in data and isinstance(data["vision"], dict):
@@ -157,6 +205,9 @@ class GameConfig:
                 "vision_min_confidence",
                 "vision_allow_low_confidence",
                 "vision_max_calls_per_page",
+                "vision_skip_llm_for_categories",
+                "vision_skip_llm_min_page_category_confidence",
+                "vision_skip_llm_text_markers_any",
             ):
                 if key in data["vision"]:
                     flat[key] = data["vision"][key]
@@ -172,9 +223,20 @@ class GameConfig:
             "device_uri", "device_serial", "poco_host", "poco_port",
             "max_steps", "max_pages", "max_actions_per_page",
             "boot_wait_s", "action_wait_s", "no_new_page_limit",
+            "page_change_path_jaccard_suppress_above",
+            "page_change_shell_min_interactive_paths",
+            "page_change_max_interactive_path_delta",
+            "transition_in_place_path_jaccard_above",
+            "transition_in_place_path_delta_max",
+            "transition_content_switch_path_jaccard_below",
+            "go_back_accept_same_logical_page",
             "vision_mode", "vision_max_candidates", "vision_min_confidence",
             "vision_allow_low_confidence", "vision_max_calls_per_page",
+            "vision_skip_llm_for_categories",
+            "vision_skip_llm_min_page_category_confidence",
+            "vision_skip_llm_text_markers_any",
             "dangerous_keywords", "safe_priority_keywords",
+            "shell_nav_path_markers",
             "page_type_hints", "control_role_hints", "output_dir",
         ):
             if key in data and key not in flat:

@@ -104,6 +104,21 @@ class ColdStartReportBuilder:
             if e.action.risk_level >= 2
         ]
 
+        blocked_actions = [
+            e.to_dict() for e in result.executions
+            if e.blocked_reason or e.unlock_hint_text
+        ]
+        blocked_pages = [
+            {
+                "page_id": meta.get("page_id", "unknown"),
+                "title": meta.get("title", "unknown"),
+                "blocked_action_count": meta.get("blocked_action_count", 0),
+                "blocked_actions": meta.get("blocked_actions", []),
+            }
+            for meta in result.page_semantics.values()
+            if meta.get("blocked_action_count", 0) > 0
+        ]
+
         # 5. 高频页面
         freq_pages = [
             {"page_id": p.page_id, "title": p.title, "visits": p.visit_count}
@@ -130,6 +145,8 @@ class ColdStartReportBuilder:
                 "total_edges": graph.edge_count,
                 "total_executions": len(result.executions),
                 "crash_count": len(result.crashes),
+                "blocked_execution_count": len(blocked_actions),
+                "blocked_page_count": len(blocked_pages),
                 "started_at": result.started_at,
                 "finished_at": result.finished_at,
             },
@@ -141,6 +158,8 @@ class ColdStartReportBuilder:
             "popup_pages": popup_list,
             "high_risk_pages": risk_pages,
             "high_risk_actions": risk_actions[:10],
+            "blocked_pages": blocked_pages,
+            "blocked_actions": blocked_actions[:20],
             "crashes": result.crashes,
             "semantic_stats": semantic_stats,
             "suggestions": suggestions,
@@ -163,6 +182,14 @@ class ColdStartReportBuilder:
 
         if result.crashes:
             suggestions.append(f"探索中发生 {len(result.crashes)} 次崩溃，建议检查游戏稳定性")
+
+        blocked_count = sum(
+            1
+            for execution in result.executions
+            if execution.blocked_reason or execution.unlock_hint_text
+        )
+        if blocked_count:
+            suggestions.append(f"发现 {blocked_count} 个受等级/条件限制入口，建议优先推进主线、等级或前置任务")
 
         lobby_pages = [p for p in graph.pages.values() if p.category == "lobby"]
         if lobby_pages:
@@ -194,6 +221,8 @@ class ColdStartReportBuilder:
         lines.append(f"| 转移边数 | {ov['total_edges']} |")
         lines.append(f"| 执行动作数 | {ov['total_executions']} |")
         lines.append(f"| 崩溃次数 | {ov['crash_count']} |")
+        lines.append(f"| 受阻动作数 | {ov['blocked_execution_count']} |")
+        lines.append(f"| 存在受阻入口的页面数 | {ov['blocked_page_count']} |")
         lines.append(f"| 开始时间 | {ov['started_at']} |")
         lines.append(f"| 结束时间 | {ov['finished_at']} |")
         lines.append("")
@@ -250,6 +279,19 @@ class ColdStartReportBuilder:
             lines.append(f"- ⚠ {rp['title']} ({rp['page_id']})")
         if not data["high_risk_pages"]:
             lines.append("- 未发现高风险页面")
+        lines.append("")
+
+        lines.append("## 未解锁/受阻入口\n")
+        if data["blocked_actions"]:
+            for blocked in data["blocked_actions"]:
+                hint = blocked.get("unlock_hint_text") or "未捕获到明确提示"
+                condition = blocked.get("unlock_condition") or "-"
+                lines.append(
+                    f"- {blocked['action_label']} | 原因={blocked.get('blocked_reason', '') or 'unknown'} "
+                    f"| 条件={condition} | 提示={hint}"
+                )
+        else:
+            lines.append("- 未发现明确的未解锁/受阻入口")
         lines.append("")
 
         lines.append("## 崩溃记录\n")

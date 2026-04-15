@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import threading
 import time
@@ -21,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .action_planner import CandidateAction, ColdStartActionPlanner
+from .action_planner import CandidateAction, ColdStartActionPlanner, _path_matches_shell_nav
 from .config import (
     ENGINE_ANDROID_UIAUTOMATION,
     ENGINE_COCOS2DX_JS,
@@ -30,9 +31,9 @@ from .config import (
     ENGINE_UNITY3D,
     GameConfig,
 )
-from .observation import ObservationCapture, PageObservation
+from .observation import ObservationCapture, ObservedNode, PageObservation
 from .state_graph import ExplorationGraph
-from .semantic import ControlRole # 【修改】去掉了 SemanticAnalyzer
+from .semantic import ControlRole, NodeSemanticInfo, _keyword_matches_node  # 【修改】去掉了 SemanticAnalyzer
 from .enhanced_semantic import EnhancedSemanticAnalyzer # 【新增】引入新的分析器
 
 
@@ -304,6 +305,42 @@ class GameConnector:
 # 探索执行记录
 # ---------------------------------------------------------------------------
 
+class TransitionDecision:
+    """动作后页面变化的分类结果。"""
+
+    def __init__(
+        self,
+        ui_changed: bool,
+        page_changed: bool,
+        requires_return: bool,
+        handoff_context: bool,
+        transition_type: str,
+        confidence: float,
+        reasons: list[str] | None = None,
+        raw_signature_changed: bool = False,
+    ) -> None:
+        self.ui_changed = ui_changed
+        self.page_changed = page_changed
+        self.requires_return = requires_return
+        self.handoff_context = handoff_context
+        self.transition_type = transition_type
+        self.confidence = confidence
+        self.reasons = reasons or []
+        self.raw_signature_changed = raw_signature_changed
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ui_changed": self.ui_changed,
+            "page_changed": self.page_changed,
+            "requires_return": self.requires_return,
+            "handoff_context": self.handoff_context,
+            "transition_type": self.transition_type,
+            "transition_confidence": round(self.confidence, 3),
+            "transition_reasons": list(self.reasons),
+            "raw_signature_changed": self.raw_signature_changed,
+        }
+
+
 class ActionExecution:
     """一次动作执行的记录。"""
 
@@ -316,6 +353,14 @@ class ActionExecution:
         after_screenshot_path: str,
         success: bool,
         page_changed: bool,
+        ui_changed: bool,
+        requires_return: bool,
+        handoff_context: bool,
+        transition_type: str,
+        transition_confidence: float,
+        transition_reasons: list[str],
+        logical_page_before: str,
+        logical_page_after: str,
         click_info: str,
         duration_ms: int,
         page_title_before: str = "",
@@ -324,6 +369,9 @@ class ActionExecution:
         cache_hit_before_action: bool = False,
         llm_pending_for_page: bool = False,
         action_role_reason: str = "",
+        blocked_reason: str = "",
+        unlock_hint_text: str = "",
+        unlock_condition: str = "",
     ) -> None:
         self.step = step
         self.action = action
@@ -332,6 +380,14 @@ class ActionExecution:
         self.after_screenshot_path = after_screenshot_path
         self.success = success
         self.page_changed = page_changed
+        self.ui_changed = ui_changed
+        self.requires_return = requires_return
+        self.handoff_context = handoff_context
+        self.transition_type = transition_type
+        self.transition_confidence = transition_confidence
+        self.transition_reasons = transition_reasons
+        self.logical_page_before = logical_page_before
+        self.logical_page_after = logical_page_after
         self.click_info = click_info
         self.duration_ms = duration_ms
         self.page_title_before = page_title_before
@@ -340,6 +396,9 @@ class ActionExecution:
         self.cache_hit_before_action = cache_hit_before_action
         self.llm_pending_for_page = llm_pending_for_page
         self.action_role_reason = action_role_reason
+        self.blocked_reason = blocked_reason
+        self.unlock_hint_text = unlock_hint_text
+        self.unlock_condition = unlock_condition
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -353,12 +412,23 @@ class ActionExecution:
             "page_visit_index": self.page_visit_index,
             "page_after": self.page_after,
             "success": self.success,
+            "ui_changed": self.ui_changed,
             "page_changed": self.page_changed,
+            "requires_return": self.requires_return,
+            "handoff_context": self.handoff_context,
+            "transition_type": self.transition_type,
+            "transition_confidence": round(self.transition_confidence, 3),
+            "transition_reasons": self.transition_reasons,
+            "logical_page_before": self.logical_page_before,
+            "logical_page_after": self.logical_page_after,
             "click_info": self.click_info,
             "duration_ms": self.duration_ms,
             "semantic_source_before_action": self.semantic_source_before_action,
             "cache_hit_before_action": self.cache_hit_before_action,
             "llm_pending_for_page": self.llm_pending_for_page,
+            "blocked_reason": self.blocked_reason,
+            "unlock_hint_text": self.unlock_hint_text,
+            "unlock_condition": self.unlock_condition,
         }
 
 
@@ -624,8 +694,12 @@ class ColdStartExplorer:
                 "llm_candidate_count": page_sem.llm_candidate_count,
                 "llm_enriched_node_count": page_sem.llm_enriched_node_count,
                 "llm_pending": page_sem.llm_pending,
+                "blocked_action_count": page_sem.blocked_action_count,
+                "blocked_actions": self._collect_blocked_actions(page_sem),
                 "degraded_mode": page_sem.degraded_mode,
             }
+            page_node.metadata["blocked_action_count"] = page_sem.blocked_action_count
+            page_node.metadata["blocked_actions"] = self._collect_blocked_actions(page_sem)
 
             _log_event(self.log_path, {
                 "kind": "page_analyzed",
@@ -696,7 +770,9 @@ class ColdStartExplorer:
                     })
                 return
 
-            all_explored = all(self.planner.is_explored(sig, c.action_key) for c in safe_candidates)
+            all_explored = all(
+                self.planner.is_explored(sig, c.action_key, c.node) for c in safe_candidates
+            )
             if all_explored:
                 _log_event(self.log_path, {
                     "kind": "page_skipped_all_explored",
@@ -722,24 +798,42 @@ class ColdStartExplorer:
                     continue
                 
                 # 【修改点 3：在循环中实时跳过已经尝试过的动作分支】
-                if self.planner.is_explored(sig, action.action_key):
+                if self.planner.is_explored(sig, action.action_key, action.node):
                     continue
 
                 action_sem = node_semantic_map.get(action.action_key)
                 execution = self._execute_action(
                     action,
+                    observation,
                     sig,
                     observation.title,
                     visit_count,
                     page_sem.semantic_source,
                     page_sem.cache_hit,
                     page_sem.llm_pending,
-                    action_sem.role_reason if action_sem else "",
+                    action_sem,
                 )
                 if execution is None:
                     continue
 
                 self.result.executions.append(execution)
+
+                if execution.blocked_reason and action_sem is not None:
+                    page_sem.blocked_action_count = sum(
+                        1
+                        for sem in page_sem.node_semantics
+                        if sem.blocked_reason or sem.unlock_hint_text
+                    )
+                    blocked_actions = self._collect_blocked_actions(page_sem)
+                    page_node.metadata["blocked_action_count"] = page_sem.blocked_action_count
+                    page_node.metadata["blocked_actions"] = blocked_actions
+                    page_summary = self.result.page_semantics.get(sig)
+                    if page_summary is not None:
+                        page_summary["blocked_action_count"] = page_sem.blocked_action_count
+                        page_summary["blocked_actions"] = blocked_actions
+                    cache = getattr(self.semantic, "cache", None)
+                    if cache is not None:
+                        cache.put(sig, page_sem)
 
                 # 记录到状态图
                 self.result.graph.add_transition(
@@ -751,9 +845,21 @@ class ColdStartExplorer:
                     success=execution.success,
                     page_changed=execution.page_changed,
                     risk_level=action.risk_level,
+                    metadata={
+                        "blocked_reason": execution.blocked_reason,
+                        "unlock_hint_text": execution.unlock_hint_text,
+                        "unlock_condition": execution.unlock_condition,
+                        "ui_changed": execution.ui_changed,
+                        "requires_return": execution.requires_return,
+                        "handoff_context": execution.handoff_context,
+                        "transition_type": execution.transition_type,
+                        "transition_confidence": execution.transition_confidence,
+                        "logical_page_before": execution.logical_page_before,
+                        "logical_page_after": execution.logical_page_after,
+                    },
                 )
 
-                self.planner.mark_explored(sig, action.action_key)
+                self.planner.mark_explored(sig, action.action_key, action.node)
 
                 # 【↓↓↓ 核心修复代码：插入在这里 ↓↓↓】
                 # 回退短路机制：如果我们执行的是兜底的返回/关闭动作，并且成功发生了跳转，
@@ -769,7 +875,7 @@ class ColdStartExplorer:
                     break  # 直接跳出 for 循环，随着 DFS 函数的 return 自然交还控制权
                     # 【↑↑↑ 核心修复代码结束 ↑↑↑】
 
-                # 如果页面变化了，递归探索新页面
+                # 如果页面变化了，根据跳转类型决定是“递归后回退”还是“切换上下文继续探索”
                 if execution.page_changed and execution.page_after:
                     after_hierarchy = self.connector.dump_hierarchy()
                     if after_hierarchy:
@@ -777,43 +883,253 @@ class ColdStartExplorer:
                             after_hierarchy,
                             screenshot_path=execution.after_screenshot_path,
                         )
-                        self._explore_from(
-                            after_obs,
-                            depth=depth + 1,
-                            path_stack=[*path_stack, sig],
-                        )
+                        if execution.requires_return:
+                            self._explore_from(
+                                after_obs,
+                                depth=depth + 1,
+                                path_stack=[*path_stack, sig],
+                            )
 
-                        # 【修改修复：探索完子页面后，尝试返回并强制校验状态】
-                        back_success = self._try_go_back(sig)
-                        
-                        if not back_success:
-                            # 再次通过实时截图确认是否真的回去了
-                            current_hierarchy = self.connector.dump_hierarchy()
-                            current_sig = self.observer.capture(current_hierarchy).signature if current_hierarchy else ""
-                            
-                            if current_sig != sig:
-                                _log_event(self.log_path, {
-                                    "kind": "stranded_aborted",
-                                    "msg": "回退失败，当前不在期望页面，终止该页面的剩余动作遍历",
-                                    "expected_sig": sig,
-                                    "actual_sig": current_sig,
-                                })
-                                break  # 核心修复：强行跳出当前 candidates 循环，停止瞎点！
+                            back_success = self._try_go_back(sig, observation.logical_page_key)
+                            if not back_success:
+                                current_hierarchy = self.connector.dump_hierarchy()
+                                current_obs = self.observer.capture(current_hierarchy) if current_hierarchy else None
+                                current_sig = current_obs.signature if current_obs else ""
+                                current_logical = current_obs.logical_page_key if current_obs else ""
+
+                                if not current_obs or not self._same_logical_page(sig, observation.logical_page_key, current_obs):
+                                    _log_event(self.log_path, {
+                                        "kind": "stranded_aborted",
+                                        "msg": "回退失败，当前不在期望页面，终止该页面的剩余动作遍历",
+                                        "expected_sig": sig,
+                                        "expected_logical_page": observation.logical_page_key,
+                                        "actual_sig": current_sig,
+                                        "actual_logical_page": current_logical,
+                                    })
+                                    break
+                        elif execution.handoff_context:
+                            _log_event(self.log_path, {
+                                "kind": "context_handoff",
+                                "msg": "检测到上下文切换，交出旧上下文并从新页面继续探索",
+                                "from_signature": sig,
+                                "to_signature": after_obs.signature,
+                                "transition_type": execution.transition_type,
+                            })
+                            self._explore_from(
+                                after_obs,
+                                depth=depth + 1,
+                                path_stack=path_stack,
+                            )
+                            break
 
     # ================================================================
     # 动作执行
     # ================================================================
 
+    def _should_suppress_page_change(
+        self,
+        before: PageObservation,
+        after: PageObservation,
+    ) -> bool:
+        """签名不同但归一化后的可交互 path 集合几乎不变时，视为同页抖动。"""
+        j_min = float(getattr(self.config, "page_change_path_jaccard_suppress_above", 0.92))
+        min_p = int(getattr(self.config, "page_change_shell_min_interactive_paths", 8))
+        max_delta = int(getattr(self.config, "page_change_max_interactive_path_delta", 15))
+
+        pb, pa = before.normalized_actionable_paths, after.normalized_actionable_paths
+        if len(pb) < min_p or len(pa) < min_p:
+            return False
+        jaccard, added, removed = self._path_diff_stats(pb, pa)
+        return jaccard >= j_min and added <= max_delta and removed <= max_delta
+
+    def _path_diff_stats(
+        self,
+        before_paths: frozenset[str],
+        after_paths: frozenset[str],
+    ) -> tuple[float, int, int]:
+        union = before_paths | after_paths
+        if not union:
+            return 1.0, 0, 0
+        inter = before_paths & after_paths
+        added = len(after_paths - before_paths)
+        removed = len(before_paths - after_paths)
+        return len(inter) / len(union), added, removed
+
+    def _same_logical_page(
+        self,
+        expected_sig: str,
+        expected_logical_key: str,
+        current_obs: PageObservation,
+    ) -> bool:
+        if current_obs.signature == expected_sig:
+            return True
+        if (
+            getattr(self.config, "go_back_accept_same_logical_page", True)
+            and expected_logical_key
+            and current_obs.logical_page_key == expected_logical_key
+        ):
+            return True
+        return False
+
+    def _classify_transition(
+        self,
+        action: CandidateAction,
+        before: PageObservation,
+        after: PageObservation,
+    ) -> TransitionDecision:
+        raw_signature_changed = after.signature != before.signature
+        ui_changed = raw_signature_changed or after.normalized_signature != before.normalized_signature
+        shell_changed = after.shell_signature != before.shell_signature
+        content_changed = after.content_signature != before.content_signature
+        overlay_changed = after.overlay_signature != before.overlay_signature
+        logical_page_changed = after.logical_page_key != before.logical_page_key
+        overall_j, overall_added, overall_removed = self._path_diff_stats(
+            before.normalized_actionable_paths,
+            after.normalized_actionable_paths,
+        )
+        content_j, content_added, content_removed = self._path_diff_stats(
+            before.content_actionable_paths,
+            after.content_actionable_paths,
+        )
+        shell_j, shell_added, shell_removed = self._path_diff_stats(
+            before.shell_actionable_paths,
+            after.shell_actionable_paths,
+        )
+        is_shell_nav_action = _path_matches_shell_nav(action.node.path, self.config)
+        in_place_j = float(getattr(self.config, "transition_in_place_path_jaccard_above", 0.92))
+        in_place_delta = int(getattr(self.config, "transition_in_place_path_delta_max", 6))
+        content_switch_cutoff = float(getattr(self.config, "transition_content_switch_path_jaccard_below", 0.72))
+        reasons = [
+            f"raw_sig={raw_signature_changed}",
+            f"shell_changed={shell_changed}",
+            f"content_changed={content_changed}",
+            f"overlay_changed={overlay_changed}",
+            f"overall_j={overall_j:.3f}",
+            f"content_j={content_j:.3f}",
+            f"shell_j={shell_j:.3f}",
+            f"logical_changed={logical_page_changed}",
+        ]
+
+        if not ui_changed and not logical_page_changed:
+            return TransitionDecision(
+                ui_changed=False,
+                page_changed=False,
+                requires_return=False,
+                handoff_context=False,
+                transition_type="in_place",
+                confidence=0.98,
+                reasons=[*reasons, "no_core_feature_changed"],
+                raw_signature_changed=raw_signature_changed,
+            )
+
+        if overlay_changed and not shell_changed and content_j >= max(0.75, content_switch_cutoff):
+            overlay_type = "overlay_push"
+            if len(after.overlay_actionable_paths) <= len(before.overlay_actionable_paths):
+                overlay_type = "overlay_pop"
+            return TransitionDecision(
+                ui_changed=True,
+                page_changed=True,
+                requires_return=overlay_type == "overlay_push",
+                handoff_context=overlay_type == "overlay_pop",
+                transition_type=overlay_type,
+                confidence=0.86,
+                reasons=[*reasons, "overlay_signature_changed_with_stable_shell"],
+                raw_signature_changed=raw_signature_changed,
+            )
+
+        if shell_changed and logical_page_changed and not is_shell_nav_action:
+            return TransitionDecision(
+                ui_changed=True,
+                page_changed=True,
+                requires_return=True,
+                handoff_context=False,
+                transition_type="full_navigation",
+                confidence=0.84,
+                reasons=[*reasons, "shell_and_logical_page_changed"],
+                raw_signature_changed=raw_signature_changed,
+            )
+
+        if content_changed and not shell_changed:
+            if content_j >= in_place_j and content_added <= in_place_delta and content_removed <= in_place_delta:
+                return TransitionDecision(
+                    ui_changed=True,
+                    page_changed=False,
+                    requires_return=False,
+                    handoff_context=False,
+                    transition_type="in_place",
+                    confidence=0.82,
+                    reasons=[*reasons, "content_high_overlap_same_shell"],
+                    raw_signature_changed=raw_signature_changed,
+                )
+            return TransitionDecision(
+                ui_changed=True,
+                page_changed=True,
+                requires_return=False,
+                handoff_context=is_shell_nav_action,
+                transition_type="hub_switch" if is_shell_nav_action else "content_switch",
+                confidence=0.78,
+                reasons=[*reasons, "content_changed_without_shell_change"],
+                raw_signature_changed=raw_signature_changed,
+            )
+
+        if content_changed and shell_changed and is_shell_nav_action:
+            return TransitionDecision(
+                ui_changed=True,
+                page_changed=True,
+                requires_return=False,
+                handoff_context=True,
+                transition_type="hub_switch",
+                confidence=0.8,
+                reasons=[*reasons, "shell_nav_action_changed_shell_and_content"],
+                raw_signature_changed=raw_signature_changed,
+            )
+
+        if self._should_suppress_page_change(before, after):
+            return TransitionDecision(
+                ui_changed=True,
+                page_changed=False,
+                requires_return=False,
+                handoff_context=False,
+                transition_type="in_place",
+                confidence=0.75,
+                reasons=[*reasons, "suppressed_by_normalized_path_overlap"],
+                raw_signature_changed=raw_signature_changed,
+            )
+
+        if logical_page_changed and overall_j < content_switch_cutoff:
+            return TransitionDecision(
+                ui_changed=True,
+                page_changed=True,
+                requires_return=True,
+                handoff_context=False,
+                transition_type="full_navigation",
+                confidence=0.68,
+                reasons=[*reasons, "logical_page_changed_with_large_path_diff"],
+                raw_signature_changed=raw_signature_changed,
+            )
+
+        return TransitionDecision(
+            ui_changed=ui_changed,
+            page_changed=False,
+            requires_return=False,
+            handoff_context=False,
+            transition_type="unknown",
+            confidence=0.45,
+            reasons=[*reasons, f"added={overall_added}", f"removed={overall_removed}", f"shell_added={shell_added}", f"shell_removed={shell_removed}"],
+            raw_signature_changed=raw_signature_changed,
+        )
+
     def _execute_action(
         self,
         action: CandidateAction,
+        current_observation: PageObservation,
         current_sig: str,
         current_title: str,
         page_visit_index: int,
         semantic_source: str,
         cache_hit: bool,
         llm_pending: bool,
-        action_role_reason: str,
+        action_semantic: NodeSemanticInfo | None,
     ) -> ActionExecution | None:
         """执行一个候选动作并返回执行记录。"""
         self._step_counter += 1
@@ -858,6 +1174,14 @@ class ColdStartExplorer:
                 after_screenshot_path="",
                 success=False,
                 page_changed=False,
+                ui_changed=False,
+                requires_return=False,
+                handoff_context=False,
+                transition_type="action_failed",
+                transition_confidence=1.0,
+                transition_reasons=["click_failed_before_observation"],
+                logical_page_before=current_observation.logical_page_key,
+                logical_page_after=current_observation.logical_page_key,
                 click_info=click_info,
                 duration_ms=duration_ms,
                 page_title_before=current_title,
@@ -865,7 +1189,7 @@ class ColdStartExplorer:
                 semantic_source_before_action=semantic_source,
                 cache_hit_before_action=cache_hit,
                 llm_pending_for_page=llm_pending,
-                action_role_reason=action_role_reason,
+                action_role_reason=action_semantic.role_reason if action_semantic else "",
             )
 
         time.sleep(self.config.action_wait_s)
@@ -890,6 +1214,14 @@ class ColdStartExplorer:
                 after_screenshot_path="",
                 success=False,
                 page_changed=False,
+                ui_changed=False,
+                requires_return=False,
+                handoff_context=False,
+                transition_type="app_crash",
+                transition_confidence=1.0,
+                transition_reasons=["app_not_running_after_action"],
+                logical_page_before=current_observation.logical_page_key,
+                logical_page_after=current_observation.logical_page_key,
                 click_info=click_info,
                 duration_ms=duration_ms,
                 page_title_before=current_title,
@@ -897,7 +1229,7 @@ class ColdStartExplorer:
                 semantic_source_before_action=semantic_source,
                 cache_hit_before_action=cache_hit,
                 llm_pending_for_page=llm_pending,
-                action_role_reason=action_role_reason,
+                action_role_reason=action_semantic.role_reason if action_semantic else "",
             )
 
         # 采集动作后的页面
@@ -927,17 +1259,75 @@ class ColdStartExplorer:
         self.connector.snapshot(screen_path)
 
         after_obs = self.observer.capture(after_hierarchy, screenshot_path=screen_path) # 【修改】传入截图
-        page_changed = after_obs.signature != current_sig
+        transition = self._classify_transition(action, current_observation, after_obs)
+        blocked_hint = self._detect_blocked_hint(
+            action=action,
+            before_obs=current_observation,
+            after_obs=after_obs,
+        ) if not transition.page_changed else {}
+        blocked_reason = str(blocked_hint.get("blocked_reason", ""))
+        unlock_hint_text = str(blocked_hint.get("unlock_hint_text", ""))
+        unlock_condition = str(blocked_hint.get("unlock_condition", ""))
+
+        if blocked_reason:
+            after_obs.metadata["blocked_reason"] = blocked_reason
+        if unlock_hint_text:
+            after_obs.metadata["unlock_hint_text"] = unlock_hint_text
+        if unlock_condition:
+            after_obs.metadata["unlock_condition"] = unlock_condition
+
+        if blocked_reason:
+            action.blocked_reason = blocked_reason
+            action.unlock_hint_text = unlock_hint_text
+            action.unlock_condition = unlock_condition
+
+        if blocked_reason and action_semantic is not None:
+            action_semantic.blocked_reason = blocked_reason
+            action_semantic.unlock_hint_text = unlock_hint_text
+            action_semantic.unlock_condition = unlock_condition
+
+        if transition.transition_type == "in_place" and transition.raw_signature_changed:
+            _log_event(self.log_path, {
+                "kind": "page_change_suppressed",
+                "msg": "签名已变，但分类器判定为同页或页内抖动，不按新页面处理",
+                "step": self._step_counter,
+                "signature": current_sig,
+                "after_signature": after_obs.signature,
+                "action_key": action.action_key,
+                "transition_type": transition.transition_type,
+                "transition_reasons": transition.reasons,
+            })
+
+        _log_event(self.log_path, {
+            "kind": "transition_classified",
+            "step": self._step_counter,
+            "signature": current_sig,
+            "after_signature": after_obs.signature,
+            "action_key": action.action_key,
+            "logical_page_before": current_observation.logical_page_key,
+            "logical_page_after": after_obs.logical_page_key,
+            **transition.to_dict(),
+        })
 
         _log_event(self.log_path, {
             "kind": "action_end",
-            "msg": f"[{self._step_counter}步] 执行完毕：耗时 {duration_ms}ms，页面是否发生跳转: {page_changed}", # 【新增】
+            "msg": f"[{self._step_counter}步] 执行完毕：耗时 {duration_ms}ms，跳转类型 {transition.transition_type}，是否进入新上下文: {transition.page_changed}",
             "step": self._step_counter,
             "signature": current_sig,
             "action_key": action.action_key,
             "after_signature": after_obs.signature,
-            "page_changed": page_changed,
+            "raw_signature_changed": transition.raw_signature_changed,
+            "ui_changed": transition.ui_changed,
+            "page_changed": transition.page_changed,
+            "requires_return": transition.requires_return,
+            "handoff_context": transition.handoff_context,
+            "transition_type": transition.transition_type,
+            "transition_confidence": transition.confidence,
+            "transition_reasons": transition.reasons,
             "duration_ms": duration_ms,
+            "blocked_reason": blocked_reason,
+            "unlock_hint_text": unlock_hint_text,
+            "unlock_condition": unlock_condition,
         })
 
         return ActionExecution(
@@ -947,7 +1337,15 @@ class ColdStartExplorer:
             page_after=after_obs.signature,
             after_screenshot_path=screen_path,
             success=True,
-            page_changed=page_changed,
+            page_changed=transition.page_changed,
+            ui_changed=transition.ui_changed,
+            requires_return=transition.requires_return,
+            handoff_context=transition.handoff_context,
+            transition_type=transition.transition_type,
+            transition_confidence=transition.confidence,
+            transition_reasons=transition.reasons,
+            logical_page_before=current_observation.logical_page_key,
+            logical_page_after=after_obs.logical_page_key,
             click_info=click_info,
             duration_ms=duration_ms,
             page_title_before=current_title,
@@ -955,8 +1353,207 @@ class ColdStartExplorer:
             semantic_source_before_action=semantic_source,
             cache_hit_before_action=cache_hit,
             llm_pending_for_page=llm_pending,
-            action_role_reason=action_role_reason,
+            action_role_reason=action_semantic.role_reason if action_semantic else "",
+            blocked_reason=blocked_reason,
+            unlock_hint_text=unlock_hint_text,
+            unlock_condition=unlock_condition,
         )
+
+    def _collect_blocked_actions(self, page_sem: Any) -> list[dict[str, str]]:
+        blocked_actions: list[dict[str, str]] = []
+        for sem in getattr(page_sem, "node_semantics", []):
+            if not (sem.blocked_reason or sem.unlock_hint_text):
+                continue
+            blocked_actions.append({
+                "action_key": sem.node.action_key,
+                "label": sem.node.label,
+                "blocked_reason": sem.blocked_reason,
+                "unlock_hint_text": sem.unlock_hint_text,
+                "unlock_condition": sem.unlock_condition,
+            })
+        return blocked_actions
+
+    def _detect_blocked_hint(
+        self,
+        action: CandidateAction,
+        before_obs: PageObservation,
+        after_obs: PageObservation,
+    ) -> dict[str, str]:
+        before_texts = {
+            self._normalize_hint_text(text)
+            for text in self._candidate_hint_texts(before_obs)
+        }
+        after_texts = self._candidate_hint_texts(after_obs)
+
+        candidate_texts = [
+            text
+            for text in after_texts
+            if self._normalize_hint_text(text) not in before_texts
+        ]
+
+        for text in candidate_texts:
+            parsed = self._parse_unlock_text(text)
+            if parsed:
+                return parsed
+
+        for title in (after_obs.title, before_obs.title):
+            cleaned_title = self._cleanup_hint_text(title)
+            if len(cleaned_title) <= 2:
+                continue
+            parsed = self._parse_unlock_text(cleaned_title)
+            if parsed:
+                return parsed
+
+        if (
+            "解锁" in (after_obs.title or "")
+            and action.role in {
+                ControlRole.PRIMARY_ENTRY,
+                ControlRole.REWARD_CLAIM,
+                ControlRole.BATTLE_START,
+            }
+        ):
+            return {
+                "blocked_reason": "unlock_requirement_not_met",
+                "unlock_hint_text": after_obs.title,
+                "unlock_condition": "",
+            }
+        return {}
+
+    def _detect_blocked_hint_from_screenshot(self, after_obs: PageObservation) -> dict[str, str]:
+        screenshot_path = getattr(after_obs, "screenshot_path", "")
+        if not screenshot_path:
+            return {}
+
+        vision_service = getattr(self.semantic, "vision_service", None)
+        if vision_service is None:
+            return {}
+
+        hint_payload = vision_service.detect_blocked_hint(screenshot_path)
+        if not hint_payload:
+            return {}
+
+        hint_text = self._cleanup_hint_text(str(hint_payload.get("hint_text", "")))
+        if not hint_text:
+            return {}
+
+        parsed = self._parse_unlock_text(hint_text)
+        if parsed:
+            return parsed
+
+        return {
+            "blocked_reason": "unknown",
+            "unlock_hint_text": hint_text,
+            "unlock_condition": hint_text,
+        }
+
+    def _candidate_hint_texts(self, observation: PageObservation) -> list[str]:
+        seen: set[str] = set()
+        texts: list[str] = []
+        ranked_nodes = sorted(
+            observation.text_nodes,
+            key=self._hint_node_priority,
+            reverse=True,
+        )
+
+        for node in ranked_nodes[:120]:
+            cleaned = self._cleanup_hint_text(node.text)
+            normalized = self._normalize_hint_text(cleaned)
+            if not cleaned or not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            texts.append(cleaned)
+
+        cleaned_title = self._cleanup_hint_text(observation.title)
+        normalized_title = self._normalize_hint_text(cleaned_title)
+        if cleaned_title and normalized_title and normalized_title not in seen:
+            texts.append(cleaned_title)
+        return texts
+
+    def _hint_node_priority(self, node: ObservedNode) -> tuple[float, int, int]:
+        score = 0.0
+        name = (node.name or "").strip().lower()
+        node_type = (node.node_type or "").strip().lower()
+        components = {str(component).strip().lower() for component in node.components}
+        text = self._cleanup_hint_text(node.text)
+
+        text_like_tokens = ("text", "label", "richtext", "textfield", "input")
+        generic_tokens = {
+            "container",
+            "component",
+            "gcomponent",
+            "node",
+            "root",
+            "canvas",
+            "scene",
+            "midlayer",
+            "mainui",
+        }
+
+        if any(token in name for token in text_like_tokens):
+            score += 6.0
+        if node_type in {"label", "text", "richtext", "richtextfield"}:
+            score += 5.0
+        if "richtext" in components or "label" in components:
+            score += 4.0
+        if name in generic_tokens:
+            score -= 4.0
+        if any(token in name for token in ("msg", "toast", "tips", "notice", "dialog")):
+            score += 2.5
+
+        if isinstance(node.pos, list) and len(node.pos) == 2:
+            x, y = node.pos
+            if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                # 临时提示通常在中上区域，越接近越优先。
+                distance = abs(x - 0.5) + abs(y - 0.24)
+                score += max(0.0, 2.5 - distance * 5.0)
+
+        if text:
+            score += min(len(text) / 24.0, 2.0)
+
+        return (
+            score,
+            node.depth,
+            len(node.path),
+        )
+
+    def _cleanup_hint_text(self, text: str) -> str:
+        if not isinstance(text, str):
+            return ""
+        cleaned = re.sub(r"<[^>]+>", "", text).strip()
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        return cleaned[:120]
+
+    def _normalize_hint_text(self, text: str) -> str:
+        return re.sub(r"\s+", "", self._cleanup_hint_text(text)).lower()
+
+    def _parse_unlock_text(self, text: str) -> dict[str, str]:
+        cleaned = self._cleanup_hint_text(text)
+        if not cleaned:
+            return {}
+
+        patterns: list[tuple[str, str]] = [
+            (r"([^，。]{0,40}\d+\s*级[^，。]{0,40}(?:解锁|开启|开放))", "unlock_requirement_not_met"),
+            (r"([^，。]{0,40}等级\s*\d+[^，。]{0,40}(?:解锁|开启|开放))", "unlock_requirement_not_met"),
+            (r"(达到\s*\d+\s*级[^，。]{0,20}(?:解锁|开启|开放)?)", "unlock_requirement_not_met"),
+            (r"(\d+\s*级(?:后)?(?:解锁|开启|开放))", "unlock_requirement_not_met"),
+            (r"(通关[^，。]{0,20}(?:后)?(?:解锁|开启|开放))", "unlock_requirement_not_met"),
+            (r"(完成[^，。]{0,20}(?:后)?(?:解锁|开启|开放))", "unlock_requirement_not_met"),
+            (r"([^，。]{0,20}(?:暂未开放|尚未开放|未开放))", "feature_not_open"),
+            (r"([^，。]{0,20}(?:未开启|尚未开启))", "feature_not_open"),
+            (r"([^，。]{0,20}(?:敬请期待))", "feature_not_open"),
+            (r"([^，。]{0,20}(?:解锁))", "unlock_requirement_not_met"),
+        ]
+
+        for pattern, reason in patterns:
+            match = re.search(pattern, cleaned)
+            if match:
+                hint_text = match.group(1).strip()
+                return {
+                    "blocked_reason": reason,
+                    "unlock_hint_text": cleaned,
+                    "unlock_condition": hint_text,
+                }
+        return {}
 
     def _log_semantic_event(self, payload: dict[str, Any]) -> None:
         _log_event(self.log_path, payload)
@@ -965,7 +1562,12 @@ class ColdStartExplorer:
     # 返回控制
     # ================================================================
 
-    def _try_go_back(self, expected_sig: str, max_attempts: int = 3) -> bool:
+    def _try_go_back(
+        self,
+        expected_sig: str,
+        expected_logical_key: str = "",
+        max_attempts: int = 3,
+    ) -> bool:
             """尝试返回到期望的页面。"""
             for attempt in range(max_attempts):
                 hierarchy = self.connector.dump_hierarchy()
@@ -973,26 +1575,43 @@ class ColdStartExplorer:
                     return False
 
                 current_obs = self.observer.capture(hierarchy)
-                if current_obs.signature == expected_sig:
+                if self._same_logical_page(expected_sig, expected_logical_key, current_obs):
                     return True
 
                 # 语义分析当前页面
                 page_sem = self.semantic.analyze(current_obs)
 
                 # 【新增逻辑：枢纽节点拦截】
-                # 如果当前已经处于主页面（大厅），则禁止尝试通过“返回”或“物理返回键”向上一层（如登录页）回退
+                # 如果当前已经处于主页面（大厅/据点等），禁止用 UI「返回」乱点（易误点退出），也不应再向登录层回退。
                 if page_sem.category.value == "lobby":
+                    expected_page = self.result.graph.get_page(expected_sig)
+                    if expected_page and expected_page.category == "lobby":
+                        _log_event(self.log_path, {
+                            "kind": "go_back_hub_tolerance",
+                            "msg": "已回到枢纽类页面（签名可能与进入子页面前略有差异），视为回退成功",
+                            "expected_sig": expected_sig,
+                            "expected_logical_page": expected_logical_key,
+                            "actual_sig": current_obs.signature,
+                            "actual_logical_page": current_obs.logical_page_key,
+                        })
+                        return True
                     _log_event(self.log_path, {
                         "kind": "go_back_aborted",
-                        "msg": "取消回退：当前处于大厅，禁止尝试向上一层回退", # 【新增】
+                        "msg": "取消回退：当前处于大厅/据点等枢纽页，禁止用 UI 返回键继续向上一层回退",
                         "signature": current_obs.signature,
                         "reason": "cannot_go_back_from_lobby"
                     })
                     return False
 
-                # 尝试点击 back/close 按钮
+                # 尝试点击 back/close 按钮（跳过危险文案，避免把「退出」当返回）
                 for sem in page_sem.node_semantics:
                     if sem.role in {ControlRole.BACK, ControlRole.CLOSE}:
+                        node_text = f"{sem.node.name or ''} {sem.node.text or ''}".lower()
+                        if any(
+                            _keyword_matches_node(kw, node_text)
+                            for kw in self.config.dangerous_keywords
+                        ):
+                            continue
                         ok, _ = self.connector.click_node(
                             sem.node.name, sem.node.pos, self._screen_size
                         )
@@ -1001,7 +1620,7 @@ class ColdStartExplorer:
                             after = self.connector.dump_hierarchy()
                             if after:
                                 after_obs = self.observer.capture(after)
-                                if after_obs.signature == expected_sig:
+                                if self._same_logical_page(expected_sig, expected_logical_key, after_obs):
                                     return True
                         break
 
@@ -1016,7 +1635,7 @@ class ColdStartExplorer:
                 screen_path = str(self.screenshot_dir / f"step_{self._step_counter}_back.png")
                 self.connector.snapshot(screen_path)
                 obs = self.observer.capture(hierarchy, screenshot_path=screen_path) # 【修改】
-                return obs.signature == expected_sig
+                return self._same_logical_page(expected_sig, expected_logical_key, obs)
             return False
 
     # ================================================================
