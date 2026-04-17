@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -c \"from poco_ui_automation import AutomationSession, HybridPlanner; print\\('backward compat OK'\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"from poco_ui_automation import ColdStartExplorer, SemanticAnalyzer, CandidateGenerator, AnomalyDetector, WorldModelStore, ObservationBuilder; print\\('cold start imports OK'\\)\")",
+      "Bash(.venv/Scripts/python.exe examples/cold_start_runner.py --mode mock --output outputs/cold_start_test --max-steps 50 --max-pages 20)",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe examples/cold_start_runner.py --mode mock --output outputs/cold_start_test --max-steps 50)",
+      "Bash(rm -rf outputs/cold_start_test)"
+    ]
+  }
+}

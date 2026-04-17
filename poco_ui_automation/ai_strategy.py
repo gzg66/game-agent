@@ -4,7 +4,16 @@ from dataclasses import dataclass, field
 import hashlib
 from typing import Iterable
 
-from .models import ActionCandidate, PageSnapshot, StateEdge, StateNode, UiNode
+from .models import (
+    ActionCandidate,
+    PageSnapshot,
+    SemanticPageState,
+    StateEdge,
+    StateNode,
+    StateTransition,
+    UiNode,
+    utc_now,
+)
 
 
 def _normalize_label(node: UiNode) -> str:
@@ -23,6 +32,10 @@ class StateGraphMemory:
     def __init__(self) -> None:
         self.nodes: dict[str, StateNode] = {}
         self.edges: dict[tuple[str, str, str, str], StateEdge] = {}
+        self._semantic_pages: dict[str, SemanticPageState] = {}
+        self._transitions: dict[str, StateTransition] = {}
+        self._step_counter: int = 0
+        self._last_new_page_step: int = 0
 
     def remember_node(self, snapshot: PageSnapshot) -> None:
         key_nodes = [node.label() for node in snapshot.nodes[:12] if node.label()]
@@ -70,6 +83,53 @@ class StateGraphMemory:
             edge.from_signature == from_signature and edge.selector_key == selector_key
             for edge in self.edges.values()
         )
+
+    # --- 冷启动扩展方法 ---
+
+    def remember_semantic_page(self, page_state: SemanticPageState) -> None:
+        self._step_counter += 1
+        existing = self._semantic_pages.get(page_state.page_signature)
+        if existing:
+            existing.last_seen_at = utc_now()
+            existing.seen_count += 1
+            if page_state.confidence > existing.confidence:
+                existing.page_type = page_state.page_type
+                existing.confidence = page_state.confidence
+                existing.canonical_page_name = page_state.canonical_page_name
+        else:
+            self._semantic_pages[page_state.page_signature] = page_state
+            self._last_new_page_step = self._step_counter
+
+    def remember_transition(self, transition: StateTransition) -> None:
+        existing = self._transitions.get(transition.transition_id)
+        if existing:
+            existing.count += 1
+            existing.last_seen_at = utc_now()
+            existing.avg_duration_ms = (
+                (existing.avg_duration_ms * (existing.count - 1) + transition.avg_duration_ms)
+                / existing.count
+            )
+        else:
+            self._transitions[transition.transition_id] = transition
+
+    def get_semantic_page(self, signature: str) -> SemanticPageState | None:
+        return self._semantic_pages.get(signature)
+
+    def get_transitions_from(self, signature: str) -> list[StateTransition]:
+        return [
+            t for t in self._transitions.values() if t.from_signature == signature
+        ]
+
+    def consecutive_no_new_pages(self) -> int:
+        return self._step_counter - self._last_new_page_step
+
+    @property
+    def semantic_pages(self) -> dict[str, SemanticPageState]:
+        return self._semantic_pages
+
+    @property
+    def transitions(self) -> dict[str, StateTransition]:
+        return self._transitions
 
 
 class HybridPlanner:
